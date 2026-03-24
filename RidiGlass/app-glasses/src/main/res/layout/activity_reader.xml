@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Rokid Glasses HUD Layout
+    - Pure black background = transparent on waveguide (pixels OFF = battery saved)
+    - White text = maximum contrast on green monochrome display
+    - No decorations, borders, or unnecessary elements
+    - Display: 480x640 (landscape), ~23° FOV
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root_layout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- Main text display -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="16dp"
+        android:scrollbars="none"
+        android:fadeScrollbars="true">
+
+        <TextView
+            android:id="@+id/reader_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#FFFFFF"
+            android:textSize="28sp"
+            android:lineSpacingMultiplier="1.4"
+            android:fontFamily="sans-serif"
+            android:gravity="start"
+            android:letterSpacing="0.02" />
+    </ScrollView>
+
+    <!-- Connection status (shown when no text) -->
+    <TextView
+        android:id="@+id/status_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:text="@string/status_scanning"
+        android:textColor="#AAAAAA"
+        android:textSize="20sp"
+        android:gravity="center" />
+
+    <!-- Font size indicator (briefly shown on adjustment) -->
+    <TextView
+        android:id="@+id/font_size_indicator"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="8dp"
+        android:textColor="#888888"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+    <!-- Volume indicator (briefly shown on volume change) -->
+    <TextView
+        android:id="@+id/volume_indicator"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="8dp"
+        android:textColor="#888888"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+</FrameLayout>

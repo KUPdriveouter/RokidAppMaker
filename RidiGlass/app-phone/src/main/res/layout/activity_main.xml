@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:gravity="center_horizontal">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="RidiGlass"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:layout_marginTop="16dp" />
+
+    <!-- Connection status -->
+    <TextView
+        android:id="@+id/status_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/status_disconnected"
+        android:textSize="18sp"
+        android:layout_marginTop="16dp" />
+
+    <!-- BLE toggle -->
+    <Button
+        android:id="@+id/toggle_button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/btn_start"
+        android:layout_marginTop="16dp" />
+
+    <!-- Glasses controls -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="안경 제어"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:layout_marginTop="24dp" />
+
+    <!-- Font size control -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginTop="8dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="글자 크기"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btn_font_down"
+            android:layout_width="56dp"
+            android:layout_height="44dp"
+            android:text="A-"
+            style="@style/Widget.Material3.Button.OutlinedButton" />
+
+        <Button
+            android:id="@+id/btn_font_up"
+            android:layout_width="56dp"
+            android:layout_height="44dp"
+            android:text="A+"
+            android:layout_marginStart="8dp"
+            style="@style/Widget.Material3.Button.OutlinedButton" />
+    </LinearLayout>
+
+    <!-- Volume control -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginTop="8dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="음성 볼륨"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btn_vol_down"
+            android:layout_width="56dp"
+            android:layout_height="44dp"
+            android:text="-"
+            style="@style/Widget.Material3.Button.OutlinedButton" />
+
+        <Button
+            android:id="@+id/btn_vol_up"
+            android:layout_width="56dp"
+            android:layout_height="44dp"
+            android:text="+"
+            android:layout_marginStart="8dp"
+            style="@style/Widget.Material3.Button.OutlinedButton" />
+    </LinearLayout>
+
+    <!-- Background mode toggle -->
+    <Button
+        android:id="@+id/btn_bg_toggle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="안경 배경: 투명"
+        android:layout_marginTop="8dp"
+        style="@style/Widget.Material3.Button.OutlinedButton" />
+
+    <!-- Settings shortcut -->
+    <Button
+        android:id="@+id/tts_settings_button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="접근성 설정 열기"
+        android:layout_marginTop="16dp"
+        style="@style/Widget.Material3.Button.TonalButton" />
+
+    <!-- Guide -->
+    <TextView
+        android:id="@+id/guide_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/guide_tts"
+        android:textSize="13sp"
+        android:layout_marginTop="12dp"
+        android:padding="12dp"
+        android:background="?android:attr/selectableItemBackground" />
+
+    <!-- Last sent text preview -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="마지막 전송 텍스트:"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:layout_marginTop="16dp" />
+
+    <TextView
+        android:id="@+id/last_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="—"
+        android:textSize="13sp"
+        android:fontFamily="monospace"
+        android:maxLines="6"
+        android:ellipsize="end"
+        android:layout_marginTop="4dp" />
+
+</LinearLayout>
+</ScrollView>
