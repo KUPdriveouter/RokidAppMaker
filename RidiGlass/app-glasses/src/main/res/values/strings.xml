@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">RidiGlass Reader</string>
-    <string name="status_scanning">폰 검색 중…</string>
-    <string name="status_connected">연결됨</string>
-    <string name="status_disconnected">연결 끊김</string>
-    <string name="waiting">리디북스에서 읽어주기를\n시작하세요</string>
-</resources>
