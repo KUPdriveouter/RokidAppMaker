@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BT Manager</string>
+    <string name="tab_devices">Devices</string>
+    <string name="tab_logs">Logs</string>
+    <string name="btn_scan">SCAN</string>
+    <string name="btn_stop">STOP</string>
+    <string name="btn_clear">CLEAR</string>
+    <string name="section_paired">PAIRED</string>
+    <string name="section_discovered">DISCOVERED</string>
+    <string name="status_idle">Idle</string>
+    <string name="status_scanning">Scanning...</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_paired">Paired</string>
+    <string name="status_pairing">Pairing...</string>
+    <string name="device_unknown">Unknown</string>
+    <string name="debug_log">DEBUG LOG</string>
+</resources>

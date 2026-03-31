@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GazeMou</string>
+    <string name="accessibility_service_description">GazeMou uses head tracking to control a mouse cursor on screen. Tap to click at cursor position.</string>
+    <string name="instructions">Toggle: swipe L L R R\nHead = cursor | Tap = click</string>
+</resources>

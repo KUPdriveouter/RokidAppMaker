@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.BtManager" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/solid_black</item>
+        <item name="android:colorPrimary">@color/hud_green</item>
+        <item name="android:colorAccent">@color/hud_green</item>
+        <item name="android:textColor">@color/hud_green</item>
+        <item name="android:textColorPrimary">@color/hud_green</item>
+        <item name="android:textColorSecondary">@color/hud_green_dim</item>
+        <item name="android:fontFamily">monospace</item>
+    </style>
+
+    <style name="HudButton">
+        <item name="android:textColor">@color/hud_green</item>
+        <item name="android:textSize">@dimen/text_size_body</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:padding">@dimen/item_padding</item>
+        <item name="android:focusable">true</item>
+        <item name="android:clickable">true</item>
+        <item name="android:gravity">center</item>
+        <item name="android:background">@drawable/bg_focused_item</item>
+    </style>
+
+    <style name="SectionHeader">
+        <item name="android:textColor">@color/hud_green_dim</item>
+        <item name="android:textSize">@dimen/text_size_small</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:paddingStart">@dimen/item_padding</item>
+        <item name="android:paddingTop">@dimen/section_padding</item>
+        <item name="android:paddingBottom">@dimen/section_padding</item>
+    </style>
+
+</resources>

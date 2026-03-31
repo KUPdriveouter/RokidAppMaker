@@ -1,0 +1,3 @@
+-keepclassmembers class android.bluetooth.** {
+    *;
+}

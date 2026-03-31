@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="@dimen/item_height"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingHorizontal="@dimen/item_padding"
+    android:background="@drawable/bg_focused_item"
+    android:focusable="true"
+    android:clickable="true">
+
+    <!-- Device info -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvDeviceName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="@dimen/text_size_body"
+            android:textColor="@color/hud_green"
+            android:fontFamily="monospace"
+            android:singleLine="true"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/tvDeviceAddress"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="@dimen/text_size_small"
+            android:textColor="@color/hud_green_dim"
+            android:fontFamily="monospace"
+            android:singleLine="true" />
+    </LinearLayout>
+
+    <!-- Status -->
+    <TextView
+        android:id="@+id/tvDeviceStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="@dimen/text_size_small"
+        android:textColor="@color/hud_green_bright"
+        android:fontFamily="monospace"
+        android:paddingStart="4dp" />
+
+</LinearLayout>

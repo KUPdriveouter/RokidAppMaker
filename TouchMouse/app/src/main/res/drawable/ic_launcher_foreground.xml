@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Eye shape (ellipse) — larger -->
+    <path
+        android:pathData="M54,30 Q18,54 54,78 Q90,54 54,30 Z"
+        android:strokeColor="#FF00FF00"
+        android:strokeWidth="3"
+        android:fillColor="#00000000" />
+
+    <!-- Iris circle — larger -->
+    <path
+        android:pathData="M54,54 m-14,0 a14,14 0,1 1,28 0 a14,14 0,1 1,-28 0"
+        android:fillColor="#FF00FF00" />
+
+    <!-- Pupil — larger -->
+    <path
+        android:pathData="M54,54 m-6,0 a6,6 0,1 1,12 0 a6,6 0,1 1,-12 0"
+        android:fillColor="#FF000000" />
+
+    <!-- Crosshair lines — longer -->
+    <path
+        android:pathData="M54,20 L54,30"
+        android:strokeColor="#FF00FF00"
+        android:strokeWidth="2.5" />
+    <path
+        android:pathData="M54,78 L54,88"
+        android:strokeColor="#FF00FF00"
+        android:strokeWidth="2.5" />
+    <path
+        android:pathData="M10,54 L18,54"
+        android:strokeColor="#FF00FF00"
+        android:strokeWidth="2.5" />
+    <path
+        android:pathData="M90,54 L98,54"
+        android:strokeColor="#FF00FF00"
+        android:strokeWidth="2.5" />
+
+</vector>

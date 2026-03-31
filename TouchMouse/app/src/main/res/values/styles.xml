@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.GazeMou" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/solid_black</item>
+        <item name="android:colorPrimary">@color/hud_green</item>
+        <item name="android:colorAccent">@color/hud_green</item>
+        <item name="android:textColor">@color/hud_green</item>
+        <item name="android:textColorPrimary">@color/hud_green</item>
+        <item name="android:textColorSecondary">@color/hud_green_dim</item>
+        <item name="android:fontFamily">monospace</item>
+    </style>
+
+    <style name="HudButton">
+        <item name="android:textColor">@color/hud_green</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:padding">8dp</item>
+        <item name="android:focusable">true</item>
+        <item name="android:clickable">true</item>
+        <item name="android:gravity">center</item>
+        <item name="android:background">@drawable/bg_focused_item</item>
+    </style>
+
+</resources>

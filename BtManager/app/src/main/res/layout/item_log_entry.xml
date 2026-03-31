@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/tvLogEntry"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:textSize="@dimen/text_size_small"
+    android:textColor="@color/hud_green"
+    android:fontFamily="monospace"
+    android:paddingHorizontal="@dimen/item_padding"
+    android:paddingVertical="2dp" />
