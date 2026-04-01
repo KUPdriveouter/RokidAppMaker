@@ -18,7 +18,7 @@ class MainActivity : AppCompatActivity() {
     // Depth 1: navigate items, Depth 2: edit selected item
     private var depth = 1
 
-    private enum class Item { TOGGLE, SENS_X, SENS_Y }
+    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y }
     private val items = Item.entries.toList()
     private var selectedIdx = 0
 
@@ -49,6 +49,10 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         TouchMouseService.instance?.appInForeground = true
         render()
+    }
+
+    private fun openAccessibilitySettings() {
+        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 
     override fun onPause() {
@@ -89,11 +93,13 @@ class MainActivity : AppCompatActivity() {
                     exitDepth2()
                 } else {
                     // Depth 1
-                    if (items[selectedIdx] == Item.TOGGLE) {
-                        TouchMouseService.instance?.toggleActive()
-                        render()
-                    } else {
-                        enterDepth2()
+                    when (items[selectedIdx]) {
+                        Item.SERVICE -> openAccessibilitySettings()
+                        Item.TOGGLE -> {
+                            TouchMouseService.instance?.toggleActive()
+                            render()
+                        }
+                        else -> enterDepth2()
                     }
                 }
                 return true
@@ -141,6 +147,7 @@ class MainActivity : AppCompatActivity() {
     private fun adjustDepth2(dir: Int) {
         val prefs = getSharedPreferences(TouchMouseService.PREFS_NAME, MODE_PRIVATE)
         when (items[selectedIdx]) {
+            Item.SERVICE -> {} // no adjustment
             Item.TOGGLE -> {
                 // Left/right toggles on/off
                 TouchMouseService.instance?.toggleActive()
@@ -167,48 +174,41 @@ class MainActivity : AppCompatActivity() {
         val sensX = prefs.getFloat(TouchMouseService.PREF_SENSITIVITY_X, 150f).toInt()
         val sensY = prefs.getFloat(TouchMouseService.PREF_SENSITIVITY_Y, 3500f).toInt()
 
-        if (!enabled) {
-            binding.tvLabel1.text = "SERVICE DISABLED"
-            binding.tvLabel2.text = ""
-            binding.tvLabel3.text = ""
-            binding.tvValue1.text = ""
-            binding.tvValue2.text = ""
-            binding.tvValue3.text = ""
-            binding.tvHint.text = "Enable in Accessibility Settings"
-            binding.tvDepth.text = ""
-            return
-        }
-
-        val item = items[selectedIdx]
-
         val sel = selectedIdx
         val editing = depth == 2
 
         // Row markers: > = selected, * = editing
-        val m0 = when { editing && sel == 0 -> "*"; sel == 0 -> ">"; else -> " " }
+        val m0 = when { sel == 0 -> ">"; else -> " " }
         val m1 = when { editing && sel == 1 -> "*"; sel == 1 -> ">"; else -> " " }
         val m2 = when { editing && sel == 2 -> "*"; sel == 2 -> ">"; else -> " " }
+        val m3 = when { editing && sel == 3 -> "*"; sel == 3 -> ">"; else -> " " }
 
-        binding.tvLabel1.text = "$m0 POWER"
-        binding.tvLabel2.text = "$m1 H.SENS"
-        binding.tvLabel3.text = "$m2 V.SENS"
-
+        binding.tvLabel0.text = "$m0 SERVICE"
+        binding.tvValue0.text = if (enabled) "ON" else "OFF"
+        binding.tvLabel1.text = "$m1 POWER"
         binding.tvValue1.text = if (active) "ON" else "OFF"
+        binding.tvLabel2.text = "$m2 H.SENS"
         binding.tvValue2.text = sensX.toString()
+        binding.tvLabel3.text = "$m3 V.SENS"
         binding.tvValue3.text = sensY.toString()
 
         // Highlight colors
         val bright = getColor(R.color.hud_green_bright)
         val normal = getColor(R.color.hud_green)
         val dim = getColor(R.color.hud_green_dim)
+        val red = getColor(R.color.hud_red)
 
-        val c0 = when { editing && sel == 0 -> bright; sel == 0 -> normal; else -> dim }
+        val c0 = when { sel == 0 -> normal; else -> dim }
         val c1 = when { editing && sel == 1 -> bright; sel == 1 -> normal; else -> dim }
         val c2 = when { editing && sel == 2 -> bright; sel == 2 -> normal; else -> dim }
+        val c3 = when { editing && sel == 3 -> bright; sel == 3 -> normal; else -> dim }
 
-        binding.tvLabel1.setTextColor(c0); binding.tvValue1.setTextColor(c0)
-        binding.tvLabel2.setTextColor(c1); binding.tvValue2.setTextColor(c1)
-        binding.tvLabel3.setTextColor(c2); binding.tvValue3.setTextColor(c2)
+        // SERVICE row: red if disabled
+        binding.tvLabel0.setTextColor(c0)
+        binding.tvValue0.setTextColor(if (enabled) c0 else red)
+        binding.tvLabel1.setTextColor(c1); binding.tvValue1.setTextColor(c1)
+        binding.tvLabel2.setTextColor(c2); binding.tvValue2.setTextColor(c2)
+        binding.tvLabel3.setTextColor(c3); binding.tvValue3.setTextColor(c3)
 
         binding.tvHint.text = if (editing) {
             "<  swipe: adjust  |  tap/back: done  >"

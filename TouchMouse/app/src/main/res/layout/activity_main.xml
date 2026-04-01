@@ -42,6 +42,39 @@
             android:background="@color/hud_green_dim"
             android:layout_marginBottom="14dp" />
 
+        <!-- Row 0: SERVICE -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp">
+
+            <TextView
+                android:id="@+id/tvLabel0"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:fontFamily="monospace"
+                android:textSize="15sp"
+                android:letterSpacing="0.05" />
+
+            <TextView
+                android:id="@+id/tvValue0"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textSize="15sp" />
+        </LinearLayout>
+
+        <!-- Separator -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/hud_green_dim"
+            android:alpha="0.3" />
+
         <!-- Row 1: POWER -->
         <LinearLayout
             android:layout_width="match_parent"
