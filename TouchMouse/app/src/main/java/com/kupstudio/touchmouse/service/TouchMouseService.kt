@@ -451,7 +451,10 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
                         nodCooldownUntil = now + NOD_COOLDOWN_MS
 
                         DebugLog.i(TAG, "Nod x2 detected, firstDir=$firstDir")
-                        if (firstDir == +1) {
+                        // SCROLL_READY: any nod x2 exits, regardless of direction
+                        if (scrollState == ScrollState.SCROLL_READY) {
+                            exitScrollMode()
+                        } else if (firstDir == +1) {
                             // Down-first nod → toggle scroll (blocked if dwell mode on)
                             if (dwellEnabled) {
                                 DebugLog.d(TAG, "Scroll blocked — dwell mode active")
