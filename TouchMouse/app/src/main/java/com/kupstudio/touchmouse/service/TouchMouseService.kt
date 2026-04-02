@@ -30,12 +30,27 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         const val PREF_DWELL_DURATION = "dwell_duration"
         const val PREF_DWELL_RADIUS = "dwell_radius"
         const val PREF_DWELL_DELAY = "dwell_delay"
+        const val PREF_SHAKE_BACK_ENABLED = "shake_back_enabled"
+        const val PREF_RECENTER_ENABLED = "recenter_enabled"
 
         private const val DEFAULT_SENSITIVITY_X = 150f
         private const val DEFAULT_SENSITIVITY_Y = 3500f
         private const val DEFAULT_DWELL_DURATION = 3000L  // 3 seconds
         private const val DEFAULT_DWELL_RADIUS = 30f
         private const val DEFAULT_DWELL_DELAY = 1000L
+
+        // Head shake → back button
+        // Yaw angular velocity threshold (rad/s) to register a direction crossing
+        private const val SHAKE_THRESHOLD = 1.5f
+        // Time window for 2 shakes (4 alternating crossings)
+        private const val SHAKE_WINDOW_MS = 1200L
+        // Required alternating crossings for 1 shake (recenter) / 2 shakes (back)
+        private const val SHAKE_1_CROSSINGS = 2
+        private const val SHAKE_2_CROSSINGS = 4
+        // Cooldown after triggering action
+        private const val SHAKE_COOLDOWN_MS = 1500L
+        // Recenter casting duration (ms)
+        private const val RECENTER_CAST_MS = 800L
 
         // Konami-style command: LEFT LEFT RIGHT RIGHT
         private const val COMMAND_TIMEOUT_MS = 2000L
@@ -78,6 +93,32 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         }
     }
 
+    // Head shake → back / recenter
+    var shakeBackEnabled = false
+        private set
+    var recenterEnabled = false
+        private set
+    private val shakeCrossings = mutableListOf<Long>()
+    private var shakeLastDirection = 0  // +1 = right, -1 = left, 0 = none
+    private var shakeCooldownUntil = 0L
+
+    // Recenter casting state
+    private var recenterCasting = false
+    private var recenterCastStart = 0L
+    private val recenterHandler = Handler(Looper.getMainLooper())
+    private val recenterTickRunnable = object : Runnable {
+        override fun run() {
+            if (!recenterCasting) return
+            val elapsed = System.currentTimeMillis() - recenterCastStart
+            val progress = (elapsed.toFloat() / RECENTER_CAST_MS).coerceIn(0f, 1f)
+            cursorOverlay.setRecenterProgress(progress)
+            if (elapsed >= RECENTER_CAST_MS) {
+                completeRecenter()
+            } else {
+                recenterHandler.postDelayed(this, 30)
+            }
+        }
+    }
 
     // Command sequence detection: L L R R
     private val commandSequence = listOf(
@@ -113,6 +154,8 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         dwellDuration = prefs.getLong(PREF_DWELL_DURATION, DEFAULT_DWELL_DURATION)
         dwellRadius = prefs.getFloat(PREF_DWELL_RADIUS, DEFAULT_DWELL_RADIUS)
         dwellDelay = prefs.getLong(PREF_DWELL_DELAY, DEFAULT_DWELL_DELAY)
+        shakeBackEnabled = prefs.getBoolean(PREF_SHAKE_BACK_ENABLED, false)
+        recenterEnabled = prefs.getBoolean(PREF_RECENTER_ENABLED, false)
         registerReceiver(toggleReceiver, IntentFilter(ACTION_TOGGLE), RECEIVER_NOT_EXPORTED)
         DebugLog.i(TAG, "Service created")
     }
@@ -157,6 +200,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         } else {
             headTracker.stop()
             dwellHandler.removeCallbacks(dwellTickRunnable)
+            cancelRecenter()
             cursorOverlay.setDwellProgress(0f)
             cursorOverlay.hide()
             DebugLog.i(TAG, "HEAD MOUSE OFF")
@@ -209,6 +253,88 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         dwellDelay = ms.coerceIn(0L, 5000L)
         prefs.edit().putLong(PREF_DWELL_DELAY, dwellDelay).apply()
         resetDwell()
+    }
+
+    fun setShakeBackEnabled(enabled: Boolean) {
+        shakeBackEnabled = enabled
+        prefs.edit().putBoolean(PREF_SHAKE_BACK_ENABLED, enabled).apply()
+    }
+
+    fun setRecenterEnabled(enabled: Boolean) {
+        recenterEnabled = enabled
+        prefs.edit().putBoolean(PREF_RECENTER_ENABLED, enabled).apply()
+    }
+
+    // ── Head shake detection ──
+    //  1 shake (2 crossings) + recenter enabled → start casting → recenter
+    //  2 shakes (4 crossings) + shake back enabled → cancel casting → back
+
+    override fun onRawYaw(yaw: Float) {
+        if (!isActive) return
+        if (!shakeBackEnabled && !recenterEnabled) return
+
+        val now = System.currentTimeMillis()
+        if (now < shakeCooldownUntil) return
+
+        val dir = when {
+            yaw > SHAKE_THRESHOLD -> +1
+            yaw < -SHAKE_THRESHOLD -> -1
+            else -> 0
+        }
+
+        if (dir != 0 && dir != shakeLastDirection) {
+            shakeLastDirection = dir
+            shakeCrossings.add(now)
+            shakeCrossings.removeAll { now - it > SHAKE_WINDOW_MS }
+
+            // 2 shakes (4 crossings) → back (takes priority, cancels recenter)
+            if (shakeBackEnabled && shakeCrossings.size >= SHAKE_2_CROSSINGS) {
+                shakeCrossings.clear()
+                shakeLastDirection = 0
+                shakeCooldownUntil = now + SHAKE_COOLDOWN_MS
+                cancelRecenter()
+                DebugLog.i(TAG, "Head shake x2 → BACK")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                return
+            }
+
+            // 1 shake (2 crossings) → start recenter casting
+            if (recenterEnabled && !recenterCasting && shakeCrossings.size >= SHAKE_1_CROSSINGS) {
+                startRecenterCast()
+            }
+        }
+    }
+
+    private fun startRecenterCast() {
+        recenterCasting = true
+        recenterCastStart = System.currentTimeMillis()
+        cursorOverlay.setRecenterProgress(0f)
+        recenterHandler.post(recenterTickRunnable)
+        DebugLog.d(TAG, "Recenter casting started")
+    }
+
+    private fun cancelRecenter() {
+        if (!recenterCasting) return
+        recenterCasting = false
+        recenterHandler.removeCallbacks(recenterTickRunnable)
+        cursorOverlay.setRecenterProgress(0f)
+    }
+
+    private fun completeRecenter() {
+        recenterCasting = false
+        recenterHandler.removeCallbacks(recenterTickRunnable)
+        cursorOverlay.setRecenterProgress(0f)
+        shakeCrossings.clear()
+        shakeLastDirection = 0
+        shakeCooldownUntil = System.currentTimeMillis() + SHAKE_COOLDOWN_MS
+
+        // Recenter cursor
+        cursorX = screenWidth / 2f
+        cursorY = screenHeight / 2f
+        cursorOverlay.updatePosition(cursorX, cursorY)
+        headTracker.recenter()
+        resetDwell()
+        DebugLog.i(TAG, "Head shake x1 → RECENTER")
     }
 
     // ── Dwell click logic ──

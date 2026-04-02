@@ -18,7 +18,7 @@ class MainActivity : AppCompatActivity() {
     // Depth 1: navigate items, Depth 2: edit selected item
     private var depth = 1
 
-    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DWELL, DW_TIME, DW_DLY, DW_RAD }
+    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DWELL, DW_TIME, DW_DLY, DW_RAD, SHAKE, RECTR }
     private val items = Item.entries.toList()
     private var selectedIdx = 0
 
@@ -102,6 +102,18 @@ class MainActivity : AppCompatActivity() {
                         Item.DWELL -> {
                             TouchMouseService.instance?.let {
                                 it.setDwellEnabled(!it.dwellEnabled)
+                            }
+                            render()
+                        }
+                        Item.SHAKE -> {
+                            TouchMouseService.instance?.let {
+                                it.setShakeBackEnabled(!it.shakeBackEnabled)
+                            }
+                            render()
+                        }
+                        Item.RECTR -> {
+                            TouchMouseService.instance?.let {
+                                it.setRecenterEnabled(!it.recenterEnabled)
                             }
                             render()
                         }
@@ -190,6 +202,16 @@ class MainActivity : AppCompatActivity() {
                 val newPx = (svc.dwellRadius + dir * 5f).coerceIn(10f, 80f)
                 svc.updateDwellRadius(newPx)
             }
+            Item.SHAKE -> {
+                TouchMouseService.instance?.let {
+                    it.setShakeBackEnabled(!it.shakeBackEnabled)
+                }
+            }
+            Item.RECTR -> {
+                TouchMouseService.instance?.let {
+                    it.setRecenterEnabled(!it.recenterEnabled)
+                }
+            }
         }
     }
 
@@ -204,6 +226,8 @@ class MainActivity : AppCompatActivity() {
         val dwellSec = (svc?.dwellDuration ?: 3000L) / 1000f
         val dwellDlySec = (svc?.dwellDelay ?: 1000L) / 1000f
         val dwellRad = svc?.dwellRadius?.toInt() ?: 30
+        val shakeOn = svc?.shakeBackEnabled == true
+        val recenterOn = svc?.recenterEnabled == true
         val sel = selectedIdx
         val editing = depth == 2
 
@@ -229,6 +253,10 @@ class MainActivity : AppCompatActivity() {
         binding.tvValue6.text = "${dwellDlySec}s"
         binding.tvLabel7.text = "${marker(7)} DW.RAD"
         binding.tvValue7.text = "${dwellRad}px"
+        binding.tvLabel8.text = "${marker(8)} SHAKE"
+        binding.tvValue8.text = if (shakeOn) "ON" else "OFF"
+        binding.tvLabel9.text = "${marker(9)} RECTR"
+        binding.tvValue9.text = if (recenterOn) "ON" else "OFF"
         // Highlight colors
         val bright = getColor(R.color.hud_green_bright)
         val normal = getColor(R.color.hud_green)
@@ -251,6 +279,8 @@ class MainActivity : AppCompatActivity() {
         binding.tvLabel5.setTextColor(rowColor(5)); binding.tvValue5.setTextColor(rowColor(5))
         binding.tvLabel6.setTextColor(rowColor(6)); binding.tvValue6.setTextColor(rowColor(6))
         binding.tvLabel7.setTextColor(rowColor(7)); binding.tvValue7.setTextColor(rowColor(7))
+        binding.tvLabel8.setTextColor(rowColor(8)); binding.tvValue8.setTextColor(rowColor(8))
+        binding.tvLabel9.setTextColor(rowColor(9)); binding.tvValue9.setTextColor(rowColor(9))
         binding.tvHint.text = if (editing) {
             "<  swipe: adjust  |  tap/back: done  >"
         } else {

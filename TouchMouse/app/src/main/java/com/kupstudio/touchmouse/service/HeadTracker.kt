@@ -29,6 +29,8 @@ class HeadTracker(context: Context) : SensorEventListener {
     interface Listener {
         /** Returns which axes were clamped (hit screen edge) */
         fun onHeadMove(deltaX: Float, deltaY: Float): ClampResult
+        /** Raw yaw angular velocity in rad/s (after smoothing) */
+        fun onRawYaw(yaw: Float) {}
     }
 
     data class ClampResult(val clampedX: Boolean, val clampedY: Boolean)
@@ -106,6 +108,9 @@ class HeadTracker(context: Context) : SensorEventListener {
         // angular_velocity (rad/s) * dt (s) * sensitivity (px/rad) = pixels
         val dx = -smoothX * dt * sensitivityX
         val dy = -smoothY * dt * sensitivityY
+
+        // Always report raw yaw for gesture detection (even in dead zone)
+        listener?.onRawYaw(smoothX)
 
         if (abs(dx) > 0.1f || abs(dy) > 0.1f) {
             val result = listener?.onHeadMove(dx, dy)

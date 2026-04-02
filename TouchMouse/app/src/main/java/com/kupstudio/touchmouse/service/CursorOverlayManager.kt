@@ -81,6 +81,11 @@ class CursorOverlayManager(private val context: Context) {
         cursorView?.setDwellProgress(progress)
     }
 
+    /** Set recenter casting progress 0.0–1.0 (inner fill shrinking toward center) */
+    fun setRecenterProgress(progress: Float) {
+        cursorView?.setRecenterProgress(progress)
+    }
+
     fun flashClick() {
         mainHandler.post {
             cursorView?.let { view ->
@@ -94,6 +99,7 @@ class CursorOverlayManager(private val context: Context) {
 
         private var flashing = false
         private var dwellProgress = 0f
+        private var recenterProgress = 0f
 
         // Inner cursor radius
         private val innerR = 8f
@@ -137,6 +143,19 @@ class CursorOverlayManager(private val context: Context) {
             strokeWidth = dwellStroke
             style = Paint.Style.STROKE
         }
+        // Recenter: crosshair lines that converge inward
+        private val recenterBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            strokeWidth = 4f
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+        }
+        private val recenterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.GREEN
+            strokeWidth = 2f
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+        }
         private val arcRect = RectF()
 
         fun setFlash(on: Boolean) {
@@ -146,6 +165,11 @@ class CursorOverlayManager(private val context: Context) {
 
         fun setDwellProgress(progress: Float) {
             dwellProgress = progress.coerceIn(0f, 1f)
+            postInvalidate()
+        }
+
+        fun setRecenterProgress(progress: Float) {
+            recenterProgress = progress.coerceIn(0f, 1f)
             postInvalidate()
         }
 
@@ -171,6 +195,23 @@ class CursorOverlayManager(private val context: Context) {
                 canvas.drawCircle(cx, cy, dwellR, dwellBgPaint)
                 // Green arc fills clockwise from top
                 canvas.drawArc(arcRect, -90f, 360f * dwellProgress, false, dwellFillPaint)
+            }
+
+            // Recenter casting: 4 crosshair ticks converging inward
+            if (recenterProgress > 0f) {
+                val outerR = 18f
+                val innerTarget = 4f
+                // Ticks start at outerR, move toward innerTarget as progress increases
+                val tipR = outerR - (outerR - innerTarget) * recenterProgress
+                val tailR = outerR
+                // Draw 4 lines: top, bottom, left, right
+                // Black outline first, then green
+                for (paint in arrayOf(recenterBgPaint, recenterPaint)) {
+                    canvas.drawLine(cx, cy - tailR, cx, cy - tipR, paint)       // top
+                    canvas.drawLine(cx, cy + tailR, cx, cy + tipR, paint)       // bottom
+                    canvas.drawLine(cx - tailR, cy, cx - tipR, cy, paint)       // left
+                    canvas.drawLine(cx + tailR, cy, cx + tipR, cy, paint)       // right
+                }
             }
         }
     }
