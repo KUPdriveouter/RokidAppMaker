@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -74,6 +75,11 @@ class CursorOverlayManager(private val context: Context) {
         } catch (_: Exception) {}
     }
 
+    /** Set dwell progress 0.0–1.0 (arc fill around cursor) */
+    fun setDwellProgress(progress: Float) {
+        cursorView?.setDwellProgress(progress)
+    }
+
     fun flashClick() {
         mainHandler.post {
             cursorView?.let { view ->
@@ -86,6 +92,7 @@ class CursorOverlayManager(private val context: Context) {
     private class CursorView(context: Context) : View(context) {
 
         private var flashing = false
+        private var dwellProgress = 0f
 
         private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.GREEN
@@ -101,20 +108,38 @@ class CursorOverlayManager(private val context: Context) {
             style = Paint.Style.FILL
             alpha = 160
         }
+        private val dwellArcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.YELLOW
+            strokeWidth = 2f
+            style = Paint.Style.STROKE
+        }
+        private val arcRect = RectF()
 
         fun setFlash(on: Boolean) {
             flashing = on
             invalidate()
         }
 
+        fun setDwellProgress(progress: Float) {
+            dwellProgress = progress.coerceIn(0f, 1f)
+            postInvalidate()
+        }
+
         override fun onDraw(canvas: Canvas) {
             val cx = width / 2f
             val cy = height / 2f
+            val r = width / 2f - 1
             if (flashing) {
-                canvas.drawCircle(cx, cy, width / 2f - 1, flashPaint)
+                canvas.drawCircle(cx, cy, r, flashPaint)
             }
-            canvas.drawCircle(cx, cy, width / 2f - 1, ringPaint)
+            canvas.drawCircle(cx, cy, r, ringPaint)
             canvas.drawCircle(cx, cy, 2.5f, dotPaint)
+
+            // Dwell progress arc (yellow arc filling clockwise from top)
+            if (dwellProgress > 0f) {
+                arcRect.set(cx - r, cy - r, cx + r, cy + r)
+                canvas.drawArc(arcRect, -90f, 360f * dwellProgress, false, dwellArcPaint)
+            }
         }
     }
 }

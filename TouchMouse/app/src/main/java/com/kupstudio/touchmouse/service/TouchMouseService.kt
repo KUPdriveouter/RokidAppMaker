@@ -26,9 +26,15 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         const val PREFS_NAME = "touch_mouse_prefs"
         const val PREF_SENSITIVITY_X = "head_sensitivity_x"
         const val PREF_SENSITIVITY_Y = "head_sensitivity_y"
+        const val PREF_DWELL_ENABLED = "dwell_enabled"
+        const val PREF_DWELL_DURATION = "dwell_duration"
 
         private const val DEFAULT_SENSITIVITY_X = 150f
         private const val DEFAULT_SENSITIVITY_Y = 3500f
+        private const val DEFAULT_DWELL_DURATION = 3000L  // 3 seconds
+
+        // Dwell click: cursor must stay within this radius (px) to count as still
+        private const val DWELL_RADIUS = 15f
 
         // Konami-style command: LEFT LEFT RIGHT RIGHT
         private const val COMMAND_TIMEOUT_MS = 2000L
@@ -47,6 +53,25 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private var screenWidth = 480
     private var screenHeight = 640
     private var isActive = false
+
+    // Dwell click state
+    var dwellEnabled = false
+        private set
+    var dwellDuration = DEFAULT_DWELL_DURATION
+        private set
+    private var dwellAnchorX = 0f
+    private var dwellAnchorY = 0f
+    private var dwellStartTime = 0L
+    private var dwellFired = false
+    private val dwellHandler = Handler(Looper.getMainLooper())
+    private val dwellTickRunnable = object : Runnable {
+        override fun run() {
+            if (!isActive || !dwellEnabled) return
+            updateDwellProgress()
+            dwellHandler.postDelayed(this, 50)  // update ~20fps
+        }
+    }
+
 
     // Command sequence detection: L L R R
     private val commandSequence = listOf(
@@ -78,6 +103,8 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
 
         cursorOverlay = CursorOverlayManager(this)
 
+        dwellEnabled = prefs.getBoolean(PREF_DWELL_ENABLED, false)
+        dwellDuration = prefs.getLong(PREF_DWELL_DURATION, DEFAULT_DWELL_DURATION)
         registerReceiver(toggleReceiver, IntentFilter(ACTION_TOGGLE), RECEIVER_NOT_EXPORTED)
         DebugLog.i(TAG, "Service created")
     }
@@ -116,9 +143,13 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             cursorY = screenHeight / 2f
             cursorOverlay.show(cursorX, cursorY)
             headTracker.start()
+            resetDwell()
+            if (dwellEnabled) dwellHandler.post(dwellTickRunnable)
             DebugLog.i(TAG, "HEAD MOUSE ON")
         } else {
             headTracker.stop()
+            dwellHandler.removeCallbacks(dwellTickRunnable)
+            cursorOverlay.setDwellProgress(0f)
             cursorOverlay.hide()
             DebugLog.i(TAG, "HEAD MOUSE OFF")
         }
@@ -139,6 +170,62 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
 
     fun getSensitivityX(): Float = headTracker.sensitivityX
     fun getSensitivityY(): Float = headTracker.sensitivityY
+
+    fun setDwellEnabled(enabled: Boolean) {
+        dwellEnabled = enabled
+        prefs.edit().putBoolean(PREF_DWELL_ENABLED, enabled).apply()
+        if (isActive) {
+            if (enabled) {
+                resetDwell()
+                dwellHandler.post(dwellTickRunnable)
+            } else {
+                dwellHandler.removeCallbacks(dwellTickRunnable)
+                cursorOverlay.setDwellProgress(0f)
+            }
+        }
+    }
+
+    fun updateDwellDuration(ms: Long) {
+        dwellDuration = ms.coerceIn(1000L, 10000L)
+        prefs.edit().putLong(PREF_DWELL_DURATION, dwellDuration).apply()
+        resetDwell()
+    }
+
+    // ── Dwell click logic ──
+
+    private fun resetDwell() {
+        dwellAnchorX = cursorX
+        dwellAnchorY = cursorY
+        dwellStartTime = System.currentTimeMillis()
+        dwellFired = false
+        cursorOverlay.setDwellProgress(0f)
+    }
+
+    private fun updateDwellProgress() {
+        if (!dwellEnabled || !isActive || dwellFired) return
+
+        val dx = cursorX - dwellAnchorX
+        val dy = cursorY - dwellAnchorY
+        val dist = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+
+        if (dist > DWELL_RADIUS) {
+            // Cursor moved — reset anchor
+            resetDwell()
+            return
+        }
+
+        val elapsed = System.currentTimeMillis() - dwellStartTime
+        val progress = (elapsed.toFloat() / dwellDuration).coerceIn(0f, 1f)
+        cursorOverlay.setDwellProgress(progress)
+
+        if (elapsed >= dwellDuration) {
+            dwellFired = true
+            DebugLog.i(TAG, "Dwell click at (${cursorX.toInt()}, ${cursorY.toInt()})")
+            performClick()
+            // Reset after a short delay so the user can move away
+            mainHandler.postDelayed({ resetDwell() }, 500)
+        }
+    }
 
     // ── HeadTracker.Listener ──
 
@@ -211,9 +298,11 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             when (keyCode) {
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BUTTON_A -> {
                     performClick()
+                    resetDwell()
                     return true
                 }
             }
+
         }
 
         // Let all other keys pass through to system
