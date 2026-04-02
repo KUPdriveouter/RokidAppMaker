@@ -19,7 +19,8 @@ import android.view.WindowManager
 class CursorOverlayManager(private val context: Context) {
 
     companion object {
-        private const val CURSOR_SIZE = 20
+        // Larger to fit dwell ring outside the cursor
+        private const val CURSOR_SIZE = 40
     }
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -94,6 +95,22 @@ class CursorOverlayManager(private val context: Context) {
         private var flashing = false
         private var dwellProgress = 0f
 
+        // Inner cursor radius
+        private val innerR = 8f
+        // Dwell ring radius (outer)
+        private val dwellR = 17f
+        private val dwellStroke = 4f
+
+        // Black outlines for contrast on any background
+        private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            strokeWidth = 4f
+            style = Paint.Style.STROKE
+        }
+        private val dotOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            style = Paint.Style.FILL
+        }
         private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.GREEN
             strokeWidth = 1.5f
@@ -108,9 +125,16 @@ class CursorOverlayManager(private val context: Context) {
             style = Paint.Style.FILL
             alpha = 160
         }
-        private val dwellArcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.YELLOW
-            strokeWidth = 2f
+        // Dwell: black background ring (always visible when dwell active)
+        private val dwellBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            strokeWidth = dwellStroke + 2f
+            style = Paint.Style.STROKE
+        }
+        // Dwell: green arc that fills clockwise
+        private val dwellFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.GREEN
+            strokeWidth = dwellStroke
             style = Paint.Style.STROKE
         }
         private val arcRect = RectF()
@@ -128,17 +152,25 @@ class CursorOverlayManager(private val context: Context) {
         override fun onDraw(canvas: Canvas) {
             val cx = width / 2f
             val cy = height / 2f
-            val r = width / 2f - 1
+
+            // Flash fill
             if (flashing) {
-                canvas.drawCircle(cx, cy, r, flashPaint)
+                canvas.drawCircle(cx, cy, innerR, flashPaint)
             }
-            canvas.drawCircle(cx, cy, r, ringPaint)
+
+            // Inner cursor: black outline behind, then green ring + dot
+            canvas.drawCircle(cx, cy, innerR, outlinePaint)
+            canvas.drawCircle(cx, cy, innerR, ringPaint)
+            canvas.drawCircle(cx, cy, 3.5f, dotOutlinePaint)
             canvas.drawCircle(cx, cy, 2.5f, dotPaint)
 
-            // Dwell progress arc (yellow arc filling clockwise from top)
+            // Dwell progress: outer ring
             if (dwellProgress > 0f) {
-                arcRect.set(cx - r, cy - r, cx + r, cy + r)
-                canvas.drawArc(arcRect, -90f, 360f * dwellProgress, false, dwellArcPaint)
+                arcRect.set(cx - dwellR, cy - dwellR, cx + dwellR, cy + dwellR)
+                // Full black background ring so the progress is clearly visible
+                canvas.drawCircle(cx, cy, dwellR, dwellBgPaint)
+                // Green arc fills clockwise from top
+                canvas.drawArc(arcRect, -90f, 360f * dwellProgress, false, dwellFillPaint)
             }
         }
     }

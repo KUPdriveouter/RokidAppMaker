@@ -28,13 +28,14 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         const val PREF_SENSITIVITY_Y = "head_sensitivity_y"
         const val PREF_DWELL_ENABLED = "dwell_enabled"
         const val PREF_DWELL_DURATION = "dwell_duration"
+        const val PREF_DWELL_RADIUS = "dwell_radius"
+        const val PREF_DWELL_DELAY = "dwell_delay"
 
         private const val DEFAULT_SENSITIVITY_X = 150f
         private const val DEFAULT_SENSITIVITY_Y = 3500f
         private const val DEFAULT_DWELL_DURATION = 3000L  // 3 seconds
-
-        // Dwell click: cursor must stay within this radius (px) to count as still
-        private const val DWELL_RADIUS = 15f
+        private const val DEFAULT_DWELL_RADIUS = 30f
+        private const val DEFAULT_DWELL_DELAY = 1000L
 
         // Konami-style command: LEFT LEFT RIGHT RIGHT
         private const val COMMAND_TIMEOUT_MS = 2000L
@@ -59,10 +60,15 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         private set
     var dwellDuration = DEFAULT_DWELL_DURATION
         private set
+    var dwellRadius = DEFAULT_DWELL_RADIUS
+        private set
+    var dwellDelay = DEFAULT_DWELL_DELAY
+        private set
     private var dwellAnchorX = 0f
     private var dwellAnchorY = 0f
     private var dwellStartTime = 0L
     private var dwellFired = false
+    private var dwellCooldownUntil = 0L
     private val dwellHandler = Handler(Looper.getMainLooper())
     private val dwellTickRunnable = object : Runnable {
         override fun run() {
@@ -105,6 +111,8 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
 
         dwellEnabled = prefs.getBoolean(PREF_DWELL_ENABLED, false)
         dwellDuration = prefs.getLong(PREF_DWELL_DURATION, DEFAULT_DWELL_DURATION)
+        dwellRadius = prefs.getFloat(PREF_DWELL_RADIUS, DEFAULT_DWELL_RADIUS)
+        dwellDelay = prefs.getLong(PREF_DWELL_DELAY, DEFAULT_DWELL_DELAY)
         registerReceiver(toggleReceiver, IntentFilter(ACTION_TOGGLE), RECEIVER_NOT_EXPORTED)
         DebugLog.i(TAG, "Service created")
     }
@@ -191,6 +199,18 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         resetDwell()
     }
 
+    fun updateDwellRadius(px: Float) {
+        dwellRadius = px.coerceIn(10f, 80f)
+        prefs.edit().putFloat(PREF_DWELL_RADIUS, dwellRadius).apply()
+        resetDwell()
+    }
+
+    fun updateDwellDelay(ms: Long) {
+        dwellDelay = ms.coerceIn(0L, 5000L)
+        prefs.edit().putLong(PREF_DWELL_DELAY, dwellDelay).apply()
+        resetDwell()
+    }
+
     // ── Dwell click logic ──
 
     private fun resetDwell() {
@@ -204,26 +224,35 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private fun updateDwellProgress() {
         if (!dwellEnabled || !isActive || dwellFired) return
 
+        val now = System.currentTimeMillis()
+
+        // Still in cooldown after last dwell click
+        if (now < dwellCooldownUntil) return
+
         val dx = cursorX - dwellAnchorX
         val dy = cursorY - dwellAnchorY
         val dist = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
 
-        if (dist > DWELL_RADIUS) {
+        if (dist > dwellRadius) {
             // Cursor moved — reset anchor
             resetDwell()
             return
         }
 
-        val elapsed = System.currentTimeMillis() - dwellStartTime
-        val progress = (elapsed.toFloat() / dwellDuration).coerceIn(0f, 1f)
+        val elapsed = now - dwellStartTime
+        // Grace period: don't show progress or count until cursor has been still long enough
+        if (elapsed < dwellDelay) return
+
+        val activeElapsed = elapsed - dwellDelay
+        val progress = (activeElapsed.toFloat() / dwellDuration).coerceIn(0f, 1f)
         cursorOverlay.setDwellProgress(progress)
 
-        if (elapsed >= dwellDuration) {
+        if (activeElapsed >= dwellDuration) {
             dwellFired = true
+            dwellCooldownUntil = now + dwellDelay
             DebugLog.i(TAG, "Dwell click at (${cursorX.toInt()}, ${cursorY.toInt()})")
             performClick()
-            // Reset after a short delay so the user can move away
-            mainHandler.postDelayed({ resetDwell() }, 500)
+            mainHandler.postDelayed({ resetDwell() }, dwellDelay)
         }
     }
 

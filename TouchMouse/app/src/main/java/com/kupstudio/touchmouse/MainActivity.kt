@@ -18,7 +18,7 @@ class MainActivity : AppCompatActivity() {
     // Depth 1: navigate items, Depth 2: edit selected item
     private var depth = 1
 
-    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DWELL, DWELL_T }
+    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DWELL, DW_TIME, DW_DLY, DW_RAD }
     private val items = Item.entries.toList()
     private var selectedIdx = 0
 
@@ -175,10 +175,20 @@ class MainActivity : AppCompatActivity() {
                     it.setDwellEnabled(!it.dwellEnabled)
                 }
             }
-            Item.DWELL_T -> {
+            Item.DW_TIME -> {
                 val svc = TouchMouseService.instance ?: return
                 val newMs = (svc.dwellDuration + dir * 500L).coerceIn(1000L, 10000L)
                 svc.updateDwellDuration(newMs)
+            }
+            Item.DW_DLY -> {
+                val svc = TouchMouseService.instance ?: return
+                val newMs = (svc.dwellDelay + dir * 250L).coerceIn(0L, 5000L)
+                svc.updateDwellDelay(newMs)
+            }
+            Item.DW_RAD -> {
+                val svc = TouchMouseService.instance ?: return
+                val newPx = (svc.dwellRadius + dir * 5f).coerceIn(10f, 80f)
+                svc.updateDwellRadius(newPx)
             }
         }
     }
@@ -192,6 +202,8 @@ class MainActivity : AppCompatActivity() {
         val sensY = prefs.getFloat(TouchMouseService.PREF_SENSITIVITY_Y, 3500f).toInt()
         val dwellOn = svc?.dwellEnabled == true
         val dwellSec = (svc?.dwellDuration ?: 3000L) / 1000f
+        val dwellDlySec = (svc?.dwellDelay ?: 1000L) / 1000f
+        val dwellRad = svc?.dwellRadius?.toInt() ?: 30
         val sel = selectedIdx
         val editing = depth == 2
 
@@ -211,8 +223,12 @@ class MainActivity : AppCompatActivity() {
         binding.tvValue3.text = sensY.toString()
         binding.tvLabel4.text = "${marker(4)} DWELL"
         binding.tvValue4.text = if (dwellOn) "ON" else "OFF"
-        binding.tvLabel5.text = "${marker(5)} DWELL.T"
+        binding.tvLabel5.text = "${marker(5)} DW.TIME"
         binding.tvValue5.text = "${dwellSec}s"
+        binding.tvLabel6.text = "${marker(6)} DW.DLY"
+        binding.tvValue6.text = "${dwellDlySec}s"
+        binding.tvLabel7.text = "${marker(7)} DW.RAD"
+        binding.tvValue7.text = "${dwellRad}px"
         // Highlight colors
         val bright = getColor(R.color.hud_green_bright)
         val normal = getColor(R.color.hud_green)
@@ -233,6 +249,8 @@ class MainActivity : AppCompatActivity() {
         binding.tvLabel3.setTextColor(rowColor(3)); binding.tvValue3.setTextColor(rowColor(3))
         binding.tvLabel4.setTextColor(rowColor(4)); binding.tvValue4.setTextColor(rowColor(4))
         binding.tvLabel5.setTextColor(rowColor(5)); binding.tvValue5.setTextColor(rowColor(5))
+        binding.tvLabel6.setTextColor(rowColor(6)); binding.tvValue6.setTextColor(rowColor(6))
+        binding.tvLabel7.setTextColor(rowColor(7)); binding.tvValue7.setTextColor(rowColor(7))
         binding.tvHint.text = if (editing) {
             "<  swipe: adjust  |  tap/back: done  >"
         } else {
