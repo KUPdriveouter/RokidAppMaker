@@ -31,6 +31,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         const val PREF_DWELL_RADIUS = "dwell_radius"
         const val PREF_DWELL_DELAY = "dwell_delay"
         const val PREF_SHAKE_BACK_ENABLED = "shake_back_enabled"
+        const val PREF_CIRCLE_TOGGLE_ENABLED = "circle_toggle_enabled"
 
         private const val DEFAULT_SENSITIVITY_X = 150f
         private const val DEFAULT_SENSITIVITY_Y = 3500f
@@ -61,6 +62,14 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
 
         // Konami-style command: LEFT LEFT RIGHT RIGHT
         private const val COMMAND_TIMEOUT_MS = 2000L
+
+        // Circle gesture → toggle cursor
+        private const val CIRCLE_SAMPLE_MS = 50L            // cursor sampling interval
+        private const val CIRCLE_ANGLE_THRESHOLD = 5.5f     // ~315° in radians (allow slack)
+        private const val CIRCLE_MIN_SPAN = 120f            // min diameter of circle in px
+        private const val CIRCLE_MAX_TIME_MS = 3000L        // max time for a single circle
+        private const val CIRCLE_2X_WINDOW_MS = 6000L       // window to complete 2 circles
+        private const val CIRCLE_COOLDOWN_MS = 2000L        // cooldown after toggle
 
         var instance: TouchMouseService? = null
             private set
@@ -105,6 +114,12 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         }
     }
 
+    // Circle toggle (passive gyro when cursor OFF)
+    var circleToggleEnabled = true
+        private set
+    private var circleVirtualX = 240f
+    private var circleVirtualY = 320f
+
     // Head shake → back
     var shakeBackEnabled = false
         private set
@@ -136,6 +151,13 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private var scrollNeutralTime = 0L    // when neutral was entered — lock new dir for a bit
     private var scrollEverSwiped = false  // did at least one swipe happen
     private var scrollAnchorTime = 0L     // when SCROLLING started
+
+    // Circle gesture detection
+    private data class CPoint(val x: Float, val y: Float, val time: Long)
+    private val circlePoints = mutableListOf<CPoint>()
+    private var circleAccAngle = 0f
+    private val circleCompletions = mutableListOf<Long>()
+    private var circleCooldownUntil = 0L
 
     // Command sequence detection: L L R R
     private val commandSequence = listOf(
@@ -170,6 +192,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         dwellRadius = prefs.getFloat(PREF_DWELL_RADIUS, DEFAULT_DWELL_RADIUS)
         dwellDelay = prefs.getLong(PREF_DWELL_DELAY, DEFAULT_DWELL_DELAY)
         shakeBackEnabled = prefs.getBoolean(PREF_SHAKE_BACK_ENABLED, false)
+        circleToggleEnabled = prefs.getBoolean(PREF_CIRCLE_TOGGLE_ENABLED, true)
         registerReceiver(toggleReceiver, IntentFilter(ACTION_TOGGLE), RECEIVER_NOT_EXPORTED)
         DebugLog.i(TAG, "Service created")
     }
@@ -185,13 +208,21 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         cursorY = screenHeight / 2f
 
         DebugLog.i(TAG, "Screen: ${screenWidth}x${screenHeight}")
+
+        // Start passive gyro for circle gesture if enabled and cursor not active
+        if (circleToggleEnabled && !isActive) {
+            circleVirtualX = screenWidth / 2f
+            circleVirtualY = screenHeight / 2f
+            headTracker.startPassive()
+        }
+
         broadcastStatus()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        headTracker.stop()  // Stop regardless (active or passive)
         if (isActive) {
-            headTracker.stop()
             cursorOverlay.hide()
             helpOverlay.hide()
         }
@@ -203,10 +234,13 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
 
     fun toggleActive() {
         isActive = !isActive
+        resetCircleDetector()
         if (isActive) {
             cursorX = screenWidth / 2f
             cursorY = screenHeight / 2f
             cursorOverlay.show(cursorX, cursorY)
+            // Switch from passive (if running) to full-rate tracking
+            headTracker.stop()
             headTracker.start()
             resetDwell()
             startDwellTicker()
@@ -221,6 +255,12 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             cursorOverlay.hide()
             helpOverlay.hide()
             releaseWakeLock()
+            // Start passive tracking for circle gesture if enabled
+            if (circleToggleEnabled) {
+                circleVirtualX = screenWidth / 2f
+                circleVirtualY = screenHeight / 2f
+                headTracker.startPassive()
+            }
             DebugLog.i(TAG, "HEAD MOUSE OFF")
         }
         broadcastStatus()
@@ -262,6 +302,22 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     fun setShakeBackEnabled(enabled: Boolean) {
         shakeBackEnabled = enabled
         prefs.edit().putBoolean(PREF_SHAKE_BACK_ENABLED, enabled).apply()
+    }
+
+    fun setCircleToggleEnabled(enabled: Boolean) {
+        circleToggleEnabled = enabled
+        prefs.edit().putBoolean(PREF_CIRCLE_TOGGLE_ENABLED, enabled).apply()
+        // Start/stop passive tracking based on new setting and current state
+        if (!isActive) {
+            if (enabled) {
+                circleVirtualX = screenWidth / 2f
+                circleVirtualY = screenHeight / 2f
+                resetCircleDetector()
+                headTracker.startPassive()
+            } else {
+                headTracker.stop()
+            }
+        }
     }
 
     // ── Sync overlay icons to current state ──
@@ -468,7 +524,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
                     val holdSec = (now - scrollHoldStart) / 1000f
                     val dist = (SCROLL_MIN_PX + SCROLL_ACCEL_PER_SEC * holdSec)
                         .coerceAtMost(SCROLL_MAX_PX)
-                    dispatchSwipe(scrollDirX * dist, scrollDirY * dist)
+                    dispatchSwipe(-scrollDirX * dist, -scrollDirY * dist)
                     scrollLastDispatch = now
                     scrollEverSwiped = true
                     resetDwell()
@@ -607,7 +663,15 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     // ── HeadTracker.Listener ──
 
     override fun onHeadMove(deltaX: Float, deltaY: Float): HeadTracker.ClampResult {
-        if (!isActive) return HeadTracker.ClampResult(false, false)
+        if (!isActive) {
+            // Passive mode: track virtual position for circle detection only
+            if (circleToggleEnabled) {
+                circleVirtualX = (circleVirtualX + deltaX).coerceIn(0f, screenWidth - 1f)
+                circleVirtualY = (circleVirtualY + deltaY).coerceIn(0f, screenHeight - 1f)
+                feedCircleDetector(circleVirtualX, circleVirtualY)
+            }
+            return HeadTracker.ClampResult(false, false)
+        }
 
         // SCROLL_READY: cursor moves freely, dwell anchors
         // (falls through to normal cursor movement below)
@@ -629,6 +693,11 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         cursorX = newX
         cursorY = newY
         cursorOverlay.updatePosition(cursorX, cursorY)
+
+        // Feed circle gesture detector (only in normal mode)
+        if (scrollState == ScrollState.NORMAL) {
+            feedCircleDetector(cursorX, cursorY)
+        }
 
         return HeadTracker.ClampResult(clampedX, clampedY)
     }
@@ -656,6 +725,94 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             .build()
 
         dispatchGesture(gesture, null, null)
+    }
+
+    // ── Circle gesture detection ──
+
+    private fun feedCircleDetector(x: Float, y: Float) {
+        val now = System.currentTimeMillis()
+        if (now < circleCooldownUntil) return
+
+        // Sample at intervals
+        if (circlePoints.isNotEmpty() && now - circlePoints.last().time < CIRCLE_SAMPLE_MS) return
+
+        circlePoints.add(CPoint(x, y, now))
+
+        // Expire old points — single circle must complete within max time
+        if (circlePoints.size > 1) {
+            val oldest = circlePoints.first().time
+            if (now - oldest > CIRCLE_MAX_TIME_MS) {
+                // Drop oldest point and reduce accumulated angle proportionally
+                circlePoints.removeAt(0)
+                // Conservative: reset angle if too old to avoid drift
+                if (circlePoints.size < 3) circleAccAngle = 0f
+            }
+        }
+
+        if (circlePoints.size < 3) return
+
+        // Compute turning angle from last 3 points
+        val p0 = circlePoints[circlePoints.size - 3]
+        val p1 = circlePoints[circlePoints.size - 2]
+        val p2 = circlePoints[circlePoints.size - 1]
+
+        val v1x = p1.x - p0.x
+        val v1y = p1.y - p0.y
+        val v2x = p2.x - p1.x
+        val v2y = p2.y - p1.y
+
+        val len1 = Math.sqrt((v1x * v1x + v1y * v1y).toDouble()).toFloat()
+        val len2 = Math.sqrt((v2x * v2x + v2y * v2y).toDouble()).toFloat()
+
+        if (len1 < 2f || len2 < 2f) return  // skip tiny movements
+
+        val cross = v1x * v2y - v1y * v2x
+        val dot = v1x * v2x + v1y * v2y
+        val angle = Math.atan2(cross.toDouble(), dot.toDouble()).toFloat()
+
+        circleAccAngle += angle
+
+        // Check if we completed a circle
+        if (kotlin.math.abs(circleAccAngle) >= CIRCLE_ANGLE_THRESHOLD) {
+            val span = computeCircleSpan()
+            if (span >= CIRCLE_MIN_SPAN) {
+                circleCompletions.add(now)
+                circleCompletions.removeAll { now - it > CIRCLE_2X_WINDOW_MS }
+                DebugLog.i(TAG, "Circle #${circleCompletions.size} detected (span=${span.toInt()}px)")
+
+                if (circleCompletions.size >= 2) {
+                    circleCompletions.clear()
+                    resetCircleDetector()
+                    circleCooldownUntil = now + CIRCLE_COOLDOWN_MS
+                    DebugLog.i(TAG, "Circle x2 → TOGGLE")
+                    toggleActive()
+                    return
+                }
+            }
+            // Reset for next circle
+            circleAccAngle = 0f
+            circlePoints.clear()
+        }
+    }
+
+    private fun computeCircleSpan(): Float {
+        if (circlePoints.size < 2) return 0f
+        var maxDistSq = 0f
+        val step = maxOf(1, circlePoints.size / 12)
+        for (i in circlePoints.indices step step) {
+            for (j in i + step until circlePoints.size step step) {
+                val dx = circlePoints[i].x - circlePoints[j].x
+                val dy = circlePoints[i].y - circlePoints[j].y
+                val dSq = dx * dx + dy * dy
+                if (dSq > maxDistSq) maxDistSq = dSq
+            }
+        }
+        return Math.sqrt(maxDistSq.toDouble()).toFloat()
+    }
+
+    private fun resetCircleDetector() {
+        circlePoints.clear()
+        circleAccAngle = 0f
     }
 
     // ── Key event handling ──

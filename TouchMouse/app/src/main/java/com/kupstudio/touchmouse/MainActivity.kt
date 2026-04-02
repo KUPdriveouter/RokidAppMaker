@@ -18,7 +18,7 @@ class MainActivity : AppCompatActivity() {
     // Depth 1: navigate items, Depth 2: edit selected item
     private var depth = 1
 
-    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DW_TIME, DW_DLY, DW_RAD, SHAKE }
+    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DW_TIME, DW_DLY, DW_RAD, SHAKE, CIRCLE }
     private val items = Item.entries.toList()
     private var selectedIdx = 0
 
@@ -107,6 +107,12 @@ class MainActivity : AppCompatActivity() {
                             }
                             render()
                         }
+                        Item.CIRCLE -> {
+                            TouchMouseService.instance?.let {
+                                it.setCircleToggleEnabled(!it.circleToggleEnabled)
+                            }
+                            render()
+                        }
                         else -> enterDepth2()
                     }
                 }
@@ -184,6 +190,11 @@ class MainActivity : AppCompatActivity() {
                     it.setShakeBackEnabled(!it.shakeBackEnabled)
                 }
             }
+            Item.CIRCLE -> {
+                TouchMouseService.instance?.let {
+                    it.setCircleToggleEnabled(!it.circleToggleEnabled)
+                }
+            }
         }
     }
 
@@ -198,6 +209,7 @@ class MainActivity : AppCompatActivity() {
         val dwellDlySec = (svc?.dwellDelay ?: 1000L) / 1000f
         val dwellRad = svc?.dwellRadius?.toInt() ?: 30
         val shakeOn = svc?.shakeBackEnabled == true
+        val circleOn = svc?.circleToggleEnabled == true
         val sel = selectedIdx
         val editing = depth == 2
 
@@ -223,6 +235,8 @@ class MainActivity : AppCompatActivity() {
         binding.tvValue6.text = "${dwellRad}px"
         binding.tvLabel7.text = "${marker(7)} SHAKE"
         binding.tvValue7.text = if (shakeOn) "ON" else "OFF"
+        binding.tvLabel8.text = "${marker(8)} CIRCLE"
+        binding.tvValue8.text = if (circleOn) "ON" else "OFF"
 
         val bright = getColor(R.color.hud_green_bright)
         val normal = getColor(R.color.hud_green)
@@ -244,10 +258,11 @@ class MainActivity : AppCompatActivity() {
         binding.tvLabel5.setTextColor(rowColor(5)); binding.tvValue5.setTextColor(rowColor(5))
         binding.tvLabel6.setTextColor(rowColor(6)); binding.tvValue6.setTextColor(rowColor(6))
         binding.tvLabel7.setTextColor(rowColor(7)); binding.tvValue7.setTextColor(rowColor(7))
+        binding.tvLabel8.setTextColor(rowColor(8)); binding.tvValue8.setTextColor(rowColor(8))
         binding.tvHint.text = if (editing) {
             "<  swipe: adjust  |  tap/back: done  >"
         } else {
-            "<  swipe: select  |  tap: enter  |  back: exit  >\nToggle anywhere: swipe L L R R\nNod down x2: dwell | Nod up x2: scroll"
+            "<  swipe: select  |  tap: enter  |  back: exit  >\nToggle: swipe L L R R  or  circle x2\nNod down x2: dwell | Nod up x2: scroll"
         }
         binding.tvDepth.text = if (editing) "[EDIT]" else ""
     }

@@ -67,6 +67,18 @@ class HeadTracker(context: Context) : SensorEventListener {
         return true
     }
 
+    /** Low-frequency mode for background gesture detection (circle toggle). */
+    fun startPassive(): Boolean {
+        if (gyroscope == null) return false
+        lastTimestamp = 0L
+        smoothX = 0f
+        smoothY = 0f
+        isTracking = true
+        sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_UI)
+        DebugLog.i(TAG, "Head tracking started (passive)")
+        return true
+    }
+
     fun stop() {
         isTracking = false
         sensorManager.unregisterListener(this)
