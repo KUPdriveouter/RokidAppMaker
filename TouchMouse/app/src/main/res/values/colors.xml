@@ -4,7 +4,10 @@
     <color name="hud_green_dim">#FF008800</color>
     <color name="hud_green_bright">#FF44FF44</color>
     <color name="hud_green_focused">#FF00CC00</color>
+    <color name="hud_cyan">#FF00BBBB</color>
+    <color name="hud_cyan_dim">#FF006666</color>
     <color name="transparent_black">#00000000</color>
     <color name="hud_red">#FFFF4444</color>
     <color name="solid_black">#FF000000</color>
+    <color name="row_highlight">#18FFFFFF</color>
 </resources>

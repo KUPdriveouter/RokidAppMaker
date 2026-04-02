@@ -10,7 +10,6 @@ import android.content.SharedPreferences
 import android.graphics.Path
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import com.kupstudio.touchmouse.util.DebugLog
@@ -32,9 +31,6 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         const val PREF_DWELL_DELAY = "dwell_delay"
         const val PREF_SHAKE_BACK_ENABLED = "shake_back_enabled"
         const val PREF_CIRCLE_TOGGLE_ENABLED = "circle_toggle_enabled"
-        const val PREF_AUTOCLICK_ENABLED = "autoclick_enabled"
-        const val PREF_RECENTER_Y = "recenter_y_pct"
-        private const val DEFAULT_RECENTER_Y = 40  // percent from top
 
         private const val DEFAULT_SENSITIVITY_X = 150f
         private const val DEFAULT_SENSITIVITY_Y = 3500f
@@ -49,36 +45,38 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         private const val SHAKE_COOLDOWN_MS = 600L
 
         // Nod detection (pitch axis) — peak-based
-        private const val NOD_PEAK_THRESHOLD = 0.5f   // rad/s to register a peak
-        private const val NOD_RETURN_THRESHOLD = 0.15f // must drop below this to confirm peak ended
-        private const val NOD_WINDOW_MS = 2000L        // time window for 2 peaks
+        private const val NOD_PEAK_THRESHOLD = 0.5f
+        private const val NOD_RETURN_THRESHOLD = 0.15f
+        private const val NOD_WINDOW_MS = 2000L
         private const val NOD_COOLDOWN_MS = 800L
 
-        // Joystick scroll (SCROLLING state) — virtual displacement based
-        private const val SCROLL_DEAD_X = 80f          // px — horizontal dead zone
-        private const val SCROLL_DEAD_Y = 120f         // px — vertical dead zone (taller screen)
+        // Joystick scroll
+        private const val SCROLL_DEAD_X = 80f
+        private const val SCROLL_DEAD_Y = 120f
         private const val SCROLL_REPEAT_MS = 250L
         private const val SCROLL_MIN_PX = 60f
         private const val SCROLL_ACCEL_PER_SEC = 80f
         private const val SCROLL_MAX_PX = 300f
         private const val SCROLL_GESTURE_MS = 120L
 
-        // Konami-style command: LEFT LEFT RIGHT RIGHT
+        // Konami-style command: L L R R
         private const val COMMAND_TIMEOUT_MS = 2000L
 
         // Circle gesture → toggle cursor
-        private const val CIRCLE_SAMPLE_MS = 50L            // cursor sampling interval
-        private const val CIRCLE_ANGLE_THRESHOLD = 5.5f     // ~315° in radians (allow slack)
-        private const val CIRCLE_MIN_SPAN = 400f            // min diameter of circle in px (large to avoid false triggers)
-        private const val CIRCLE_MIN_WIDTH = 120f           // min horizontal extent in px
-        private const val CIRCLE_MIN_HEIGHT = 120f          // min vertical extent in px
-        private const val CIRCLE_MAX_ASPECT = 3.0f          // max width/height ratio
-        private const val CIRCLE_MAX_TIME_MS = 5000L        // max time for a single circle (generous for neck comfort)
-        private const val CIRCLE_COOLDOWN_MS = 2000L        // cooldown after toggle
+        private const val CIRCLE_SAMPLE_MS = 50L
+        private const val CIRCLE_ANGLE_THRESHOLD = 5.5f
+        private const val CIRCLE_MIN_SPAN = 400f
+        private const val CIRCLE_MIN_WIDTH = 120f
+        private const val CIRCLE_MIN_HEIGHT = 120f
+        private const val CIRCLE_MAX_ASPECT = 3.0f
+        private const val CIRCLE_MAX_TIME_MS = 5000L
+        private const val CIRCLE_COOLDOWN_MS = 2000L
 
         var instance: TouchMouseService? = null
             private set
     }
+
+    // ── Core ──
 
     private lateinit var headTracker: HeadTracker
     private lateinit var cursorOverlay: CursorOverlayManager
@@ -86,15 +84,15 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private lateinit var prefs: SharedPreferences
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private var wakeLock: PowerManager.WakeLock? = null
-
     private var cursorX = 240f
     private var cursorY = 320f
     private var screenWidth = 480
     private var screenHeight = 640
     private var isActive = false
+    var appInForeground = false
 
-    // Dwell — toggled by nod-down x2
+    // ── Dwell ──
+
     var dwellEnabled = false
         private set
     var dwellDuration = DEFAULT_DWELL_DURATION
@@ -112,46 +110,18 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private val dwellTickRunnable = object : Runnable {
         override fun run() {
             if (!isActive) return
-            // Dwell runs when dwellEnabled, autoClick, or in scroll mode
-            if (!dwellEnabled && !autoClickEnabled && scrollState == ScrollState.NORMAL) return
+            if (!dwellEnabled && scrollState == ScrollState.NORMAL) return
             updateDwellProgress()
             dwellHandler.postDelayed(this, 50)
         }
     }
 
-    // Auto-click + recenter (when dwell mode OFF and not scrolling)
-    var autoClickEnabled = true
-        private set
-    var recenterYPct = DEFAULT_RECENTER_Y
-        private set
+    // ── Scroll mode ──
 
-    // Circle toggle (passive gyro when cursor OFF)
-    var circleToggleEnabled = false
-        private set
-    private var passiveWakeLock: PowerManager.WakeLock? = null
-    private var circleVirtualX = 240f
-    private var circleVirtualY = 320f
-
-    // Head shake → back
-    var shakeBackEnabled = false
-        private set
-    private val shakeCrossings = mutableListOf<Long>()
-    private var shakeLastDirection = 0
-    private var shakeCooldownUntil = 0L
-
-    // Nod detection — peak-based
-    private data class NodPeak(val time: Long, val dir: Int)  // dir: +1=down, -1=up
-    private val nodPeaks = mutableListOf<NodPeak>()
-    private var nodInPeak = false       // currently above threshold
-    private var nodPeakDir = 0          // direction of current peak
-    private var nodCooldownUntil = 0L
-
-    // Scroll mode
     enum class ScrollState { NORMAL, SCROLL_READY, SCROLLING }
     var scrollState = ScrollState.NORMAL
         private set
     private var dwellWasEnabled = false
-    // Joystick scroll state (SCROLLING) — virtual displacement based
     private var scrollVirtualX = 0f
     private var scrollVirtualY = 0f
     private var scrollDirX = 0f
@@ -160,31 +130,57 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private var scrollMaxY = 0f
     private var scrollHoldStart = 0L
     private var scrollLastDispatch = 0L
-    private var scrollNeutralTime = 0L    // when neutral was entered — lock new dir for a bit
-    private var scrollEverSwiped = false  // did at least one swipe happen
-    private var scrollAnchorTime = 0L     // when SCROLLING started
+    private var scrollNeutralTime = 0L
+    private var scrollEverSwiped = false
+    private var scrollAnchorTime = 0L
 
-    // Circle gesture detection
+    // ── Head shake → back ──
+
+    var shakeBackEnabled = false
+        private set
+    private val shakeCrossings = mutableListOf<Long>()
+    private var shakeLastDirection = 0
+    private var shakeCooldownUntil = 0L
+
+    // ── Nod detection ──
+
+    private data class NodPeak(val time: Long, val dir: Int)
+    private val nodPeaks = mutableListOf<NodPeak>()
+    private var nodInPeak = false
+    private var nodPeakDir = 0
+    private var nodCooldownUntil = 0L
+
+    // ── Circle gesture ──
+
+    var circleToggleEnabled = false
+        private set
+    private var circleVirtualX = 240f
+    private var circleVirtualY = 320f
     private data class CPoint(val x: Float, val y: Float, val time: Long)
     private val circlePoints = mutableListOf<CPoint>()
     private var circleAccAngle = 0f
     private var circleCooldownUntil = 0L
 
-    // Command sequence detection: L L R R
+    // ── Konami command: L L R R ──
+
     private val commandSequence = listOf(
-        KeyEvent.KEYCODE_DPAD_LEFT,
-        KeyEvent.KEYCODE_DPAD_LEFT,
-        KeyEvent.KEYCODE_DPAD_RIGHT,
-        KeyEvent.KEYCODE_DPAD_RIGHT
+        KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_LEFT,
+        KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_RIGHT
     )
     private val inputBuffer = mutableListOf<Int>()
     private var lastInputTime = 0L
+
+    // ── Toggle receiver ──
 
     private val toggleReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == ACTION_TOGGLE) toggleActive()
         }
     }
+
+    // ══════════════════════════════════════════
+    //  Lifecycle
+    // ══════════════════════════════════════════
 
     override fun onCreate() {
         super.onCreate()
@@ -204,8 +200,6 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         dwellDelay = prefs.getLong(PREF_DWELL_DELAY, DEFAULT_DWELL_DELAY)
         shakeBackEnabled = prefs.getBoolean(PREF_SHAKE_BACK_ENABLED, false)
         circleToggleEnabled = prefs.getBoolean(PREF_CIRCLE_TOGGLE_ENABLED, false)
-        autoClickEnabled = prefs.getBoolean(PREF_AUTOCLICK_ENABLED, true)
-        recenterYPct = prefs.getInt(PREF_RECENTER_Y, DEFAULT_RECENTER_Y)
         registerReceiver(toggleReceiver, IntentFilter(ACTION_TOGGLE), RECEIVER_NOT_EXPORTED)
         DebugLog.i(TAG, "Service created")
     }
@@ -219,33 +213,34 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         screenHeight = dm.heightPixels
         cursorX = screenWidth / 2f
         cursorY = screenHeight / 2f
-
         DebugLog.i(TAG, "Screen: ${screenWidth}x${screenHeight}")
 
-        // Start passive gyro for circle gesture if enabled and cursor not active
         if (circleToggleEnabled && !isActive) {
             circleVirtualX = screenWidth / 2f
             circleVirtualY = screenHeight / 2f
-            acquirePassiveWakeLock()
             headTracker.startPassive()
         }
-
         broadcastStatus()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        headTracker.stop()  // Stop regardless (active or passive)
+        headTracker.stop()
         if (isActive) {
             cursorOverlay.hide()
             helpOverlay.hide()
         }
-        releaseWakeLock()
-        releasePassiveWakeLock()
         try { unregisterReceiver(toggleReceiver) } catch (_: Exception) {}
         instance = null
         DebugLog.i(TAG, "Service destroyed")
     }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onInterrupt() { DebugLog.w(TAG, "Service interrupted") }
+
+    // ══════════════════════════════════════════
+    //  Public API
+    // ══════════════════════════════════════════
 
     fun toggleActive() {
         isActive = !isActive
@@ -254,13 +249,10 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             cursorX = screenWidth / 2f
             cursorY = screenHeight / 2f
             cursorOverlay.show(cursorX, cursorY)
-            // Switch from passive (if running) to full-rate tracking
-            releasePassiveWakeLock()
             headTracker.stop()
             headTracker.start()
             resetDwell()
             startDwellTicker()
-            acquireWakeLock()
             DebugLog.i(TAG, "HEAD MOUSE ON")
         } else {
             headTracker.stop()
@@ -270,12 +262,9 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             cursorOverlay.setDwellProgress(0f)
             cursorOverlay.hide()
             helpOverlay.hide()
-            releaseWakeLock()
-            // Start passive tracking for circle gesture if enabled
             if (circleToggleEnabled) {
                 circleVirtualX = screenWidth / 2f
                 circleVirtualY = screenHeight / 2f
-                acquirePassiveWakeLock()
                 headTracker.startPassive()
             }
             DebugLog.i(TAG, "HEAD MOUSE OFF")
@@ -321,45 +310,29 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         prefs.edit().putBoolean(PREF_SHAKE_BACK_ENABLED, enabled).apply()
     }
 
-    fun updateRecenterY(pct: Int) {
-        recenterYPct = pct.coerceIn(10, 90)
-        prefs.edit().putInt(PREF_RECENTER_Y, recenterYPct).apply()
-    }
-
-    fun setAutoClickEnabled(enabled: Boolean) {
-        autoClickEnabled = enabled
-        prefs.edit().putBoolean(PREF_AUTOCLICK_ENABLED, enabled).apply()
-        if (isActive && enabled && !dwellEnabled && scrollState == ScrollState.NORMAL) {
-            resetDwell()
-            startDwellTicker()
-        }
-    }
-
     fun setCircleToggleEnabled(enabled: Boolean) {
         circleToggleEnabled = enabled
         prefs.edit().putBoolean(PREF_CIRCLE_TOGGLE_ENABLED, enabled).apply()
-        // Start/stop passive tracking based on new setting and current state
         if (!isActive) {
             if (enabled) {
                 circleVirtualX = screenWidth / 2f
                 circleVirtualY = screenHeight / 2f
                 resetCircleDetector()
-                acquirePassiveWakeLock()
                 headTracker.startPassive()
             } else {
                 headTracker.stop()
-                releasePassiveWakeLock()
             }
         }
     }
 
-    // ── Sync overlay icons to current state ──
+    // ══════════════════════════════════════════
+    //  Overlay sync
+    // ══════════════════════════════════════════
 
     private fun syncOverlay() {
         cursorOverlay.setDwellMode(dwellEnabled)
         cursorOverlay.setScrollMode(scrollState != ScrollState.NORMAL)
         cursorOverlay.setDwellProgress(0f)
-
         when {
             scrollState == ScrollState.SCROLLING ->
                 helpOverlay.show("SCROLLING", "tilt: scroll | stop + dwell: release anchor")
@@ -372,7 +345,9 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         }
     }
 
-    // ── Dwell mode (nod toggle) ──
+    // ══════════════════════════════════════════
+    //  Dwell mode
+    // ══════════════════════════════════════════
 
     private fun setDwellMode(on: Boolean) {
         dwellEnabled = on
@@ -380,13 +355,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             resetDwell()
             startDwellTicker()
         } else if (scrollState == ScrollState.NORMAL) {
-            if (autoClickEnabled) {
-                // Keep ticker alive for auto-click
-                resetDwell()
-                startDwellTicker()
-            } else {
-                dwellHandler.removeCallbacks(dwellTickRunnable)
-            }
+            dwellHandler.removeCallbacks(dwellTickRunnable)
         }
         syncOverlay()
         DebugLog.i(TAG, "Dwell mode ${if (on) "ON" else "OFF"}")
@@ -398,10 +367,66 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         dwellHandler.post(dwellTickRunnable)
     }
 
-    // ── Scroll mode (nod toggle) ──
+    private fun resetDwell() {
+        dwellAnchorX = cursorX
+        dwellAnchorY = cursorY
+        dwellStartTime = System.currentTimeMillis()
+        dwellFired = false
+        cursorOverlay.setDwellProgress(0f)
+    }
+
+    private fun updateDwellProgress() {
+        if (!isActive || dwellFired) return
+        if (!dwellEnabled && scrollState == ScrollState.NORMAL) return
+
+        val now = System.currentTimeMillis()
+        if (now < dwellCooldownUntil) return
+
+        val dx = cursorX - dwellAnchorX
+        val dy = cursorY - dwellAnchorY
+        if (Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat() > dwellRadius) {
+            resetDwell()
+            return
+        }
+
+        if (scrollState == ScrollState.SCROLLING) {
+            if (scrollDirX != 0f || scrollDirY != 0f) return
+            if (!scrollEverSwiped && now - scrollAnchorTime < 3000L) return
+        }
+
+        val elapsed = now - dwellStartTime
+        if (elapsed < dwellDelay) return
+
+        val activeElapsed = elapsed - dwellDelay
+        cursorOverlay.setDwellProgress((activeElapsed.toFloat() / dwellDuration).coerceIn(0f, 1f))
+
+        if (activeElapsed >= dwellDuration) {
+            dwellFired = true
+            dwellCooldownUntil = now + dwellDelay
+            when (scrollState) {
+                ScrollState.SCROLL_READY -> {
+                    DebugLog.i(TAG, "Dwell → anchor at (${cursorX.toInt()}, ${cursorY.toInt()})")
+                    enterScrolling()
+                    mainHandler.postDelayed({ resetDwell() }, dwellDelay)
+                }
+                ScrollState.SCROLLING -> {
+                    DebugLog.i(TAG, "Dwell → exit scroll (anchor released)")
+                    exitScrollMode()
+                }
+                ScrollState.NORMAL -> {
+                    DebugLog.i(TAG, "Dwell click at (${cursorX.toInt()}, ${cursorY.toInt()})")
+                    performClick()
+                    mainHandler.postDelayed({ resetDwell() }, dwellDelay)
+                }
+            }
+        }
+    }
+
+    // ══════════════════════════════════════════
+    //  Scroll mode
+    // ══════════════════════════════════════════
 
     private fun enterScrollReady() {
-        // Save and disable dwell mode — scroll has its own dwell logic
         dwellWasEnabled = dwellEnabled
         if (dwellEnabled) {
             dwellEnabled = false
@@ -437,13 +462,9 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         scrollState = ScrollState.NORMAL
         scrollDirX = 0f
         scrollDirY = 0f
-        // Restore dwell mode if it was on before scroll
-        if (dwellWasEnabled) {
-            dwellEnabled = true
-        }
+        if (dwellWasEnabled) dwellEnabled = true
         dwellWasEnabled = false
-        // Restart ticker for dwell or autoclick
-        if (dwellEnabled || autoClickEnabled) {
+        if (dwellEnabled) {
             resetDwell()
             startDwellTicker()
         }
@@ -451,311 +472,63 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         DebugLog.i(TAG, "Scroll OFF")
     }
 
-    // ── Nod detection — distinguishes nod-down vs nod-up by first crossing direction ──
-
-    override fun onRawPitch(pitch: Float) {
-        if (!isActive) return
-
-        val now = System.currentTimeMillis()
-        if (now < nodCooldownUntil) return
-        // Allow nod during all scroll states so user can exit via nod x2
-
-        val absPitch = kotlin.math.abs(pitch)
-
-        if (!nodInPeak) {
-            // Waiting for a peak to start
-            if (absPitch > NOD_PEAK_THRESHOLD) {
-                nodInPeak = true
-                nodPeakDir = if (pitch > 0) +1 else -1
-            }
-        } else {
-            // In a peak — wait for it to end (velocity drops back down)
-            if (absPitch < NOD_RETURN_THRESHOLD) {
-                // Peak ended — record it
-                nodInPeak = false
-                nodPeaks.removeAll { now - it.time > NOD_WINDOW_MS }
-                nodPeaks.add(NodPeak(now, nodPeakDir))
-                DebugLog.d(TAG, "Nod peak #${nodPeaks.size} dir=${nodPeakDir}")
-
-                // Need 2 peaks with alternating directions = 1 nod cycle
-                // 4 peaks with alternating directions = 2 nod cycles
-                if (nodPeaks.size >= 4) {
-                    val last4 = nodPeaks.takeLast(4)
-                    // Check alternating: d0 != d1, d1 != d2, d2 != d3
-                    val alternating = (0 until 3).all { last4[it].dir != last4[it + 1].dir }
-                    if (alternating) {
-                        // First peak direction determines nod type
-                        val firstDir = last4[0].dir
-                        nodPeaks.clear()
-                        nodCooldownUntil = now + NOD_COOLDOWN_MS
-
-                        DebugLog.i(TAG, "Nod x2 detected, firstDir=$firstDir")
-                        // SCROLL_READY or SCROLLING: any nod x2 exits
-                        if (scrollState != ScrollState.NORMAL) {
-                            exitScrollMode()
-                        } else if (firstDir == +1) {
-                            // Down-first nod → toggle scroll (blocked if dwell mode on)
-                            if (dwellEnabled) {
-                                DebugLog.d(TAG, "Scroll blocked — dwell mode active")
-                            } else if (scrollState == ScrollState.NORMAL) {
-                                enterScrollReady()
-                            } else {
-                                exitScrollMode()
-                            }
-                        } else {
-                            // Up-first nod → toggle dwell (blocked if scroll mode on)
-                            if (scrollState != ScrollState.NORMAL) {
-                                DebugLog.d(TAG, "Dwell blocked — scroll mode active")
-                            } else {
-                                setDwellMode(!dwellEnabled)
-                            }
-                        }
-                    }
-                }
-                nodPeakDir = 0
-            }
-        }
-    }
-
-    // ── Joystick scroll for SCROLLING state ──
-    // Virtual cursor displacement from anchor determines scroll direction
-
-    // Virtual displacement joystick with max-distance tracking.
-    // Direction change requires returning past the max distance reached → forces neutral first.
-
     private fun updateJoystickScroll() {
         val now = System.currentTimeMillis()
-
-        // Normalized displacement: how far in each axis relative to its dead zone
         val normX = scrollVirtualX / SCROLL_DEAD_X
         val normY = scrollVirtualY / SCROLL_DEAD_Y
         val absNX = kotlin.math.abs(normX)
         val absNY = kotlin.math.abs(normY)
 
-        // Track max displacement per axis (in normalized units)
-        // Cap max at 2.0 normalized units — prevents huge return distances from long holds
         if (scrollDirX != 0f) scrollMaxX = maxOf(scrollMaxX, absNX).coerceAtMost(2.0f)
         if (scrollDirY != 0f) scrollMaxY = maxOf(scrollMaxY, absNY).coerceAtMost(2.0f)
 
-        // Currently scrolling — check if we should go neutral
+        // Active scroll — check neutral condition
         if (scrollDirX != 0f || scrollDirY != 0f) {
-            // Neutral condition: returned past max distance in the dominant axis
             val shouldNeutral = if (scrollDirX != 0f) {
-                // Horizontal: must return to within 15% of origin on opposite side
-                val returnThreshold = -scrollMaxX * 0.15f
-                (scrollDirX > 0 && normX < returnThreshold) || (scrollDirX < 0 && normX > -returnThreshold)
+                val t = -scrollMaxX * 0.15f
+                (scrollDirX > 0 && normX < t) || (scrollDirX < 0 && normX > -t)
             } else {
-                val returnThreshold = -scrollMaxY * 0.15f
-                (scrollDirY > 0 && normY < returnThreshold) || (scrollDirY < 0 && normY > -returnThreshold)
+                val t = -scrollMaxY * 0.15f
+                (scrollDirY > 0 && normY < t) || (scrollDirY < 0 && normY > -t)
             }
-
             if (shouldNeutral) {
-                scrollDirX = 0f
-                scrollDirY = 0f
-                scrollMaxX = 0f
-                scrollMaxY = 0f
-                // Reset virtual position to 0 so new direction starts fresh
-                scrollVirtualX = 0f
-                scrollVirtualY = 0f
+                scrollDirX = 0f; scrollDirY = 0f
+                scrollMaxX = 0f; scrollMaxY = 0f
+                scrollVirtualX = 0f; scrollVirtualY = 0f
                 scrollNeutralTime = now
                 cursorOverlay.setScrollDir(0f, 0f)
                 DebugLog.d(TAG, "Scroll neutral (returned past max)")
-            } else {
-                // Still in active scroll direction — dispatch swipes
-                if (now - scrollLastDispatch >= SCROLL_REPEAT_MS) {
-                    val holdSec = (now - scrollHoldStart) / 1000f
-                    val dist = (SCROLL_MIN_PX + SCROLL_ACCEL_PER_SEC * holdSec)
-                        .coerceAtMost(SCROLL_MAX_PX)
-                    dispatchSwipe(-scrollDirX * dist, -scrollDirY * dist)
-                    scrollLastDispatch = now
-                    scrollEverSwiped = true
-                    resetDwell()
-                }
+            } else if (now - scrollLastDispatch >= SCROLL_REPEAT_MS) {
+                val holdSec = (now - scrollHoldStart) / 1000f
+                val dist = (SCROLL_MIN_PX + SCROLL_ACCEL_PER_SEC * holdSec).coerceAtMost(SCROLL_MAX_PX)
+                dispatchSwipe(-scrollDirX * dist, -scrollDirY * dist)
+                scrollLastDispatch = now
+                scrollEverSwiped = true
+                resetDwell()
             }
             return
         }
 
-        // Currently neutral — check if we should activate a direction
-        // Must wait 500ms after going neutral (head still returning to center)
+        // Neutral — check direction activation (500ms cooldown)
         if (now - scrollNeutralTime < 500L) {
-            // Still in cooldown — keep resetting virtual position to prevent accumulation
-            scrollVirtualX = 0f
-            scrollVirtualY = 0f
+            scrollVirtualX = 0f; scrollVirtualY = 0f
             return
         }
-
-        val maxNorm = maxOf(absNX, absNY)
-        if (maxNorm >= 1.0f) {
-            // Past dead zone — commit direction
+        if (maxOf(absNX, absNY) >= 1.0f) {
             if (absNX > absNY) {
-                scrollDirX = if (scrollVirtualX > 0) 1f else -1f
-                scrollDirY = 0f
+                scrollDirX = if (scrollVirtualX > 0) 1f else -1f; scrollDirY = 0f
             } else {
-                scrollDirX = 0f
-                scrollDirY = if (scrollVirtualY > 0) 1f else -1f
+                scrollDirX = 0f; scrollDirY = if (scrollVirtualY > 0) 1f else -1f
             }
-            scrollMaxX = absNX
-            scrollMaxY = absNY
-            scrollHoldStart = now
-            scrollLastDispatch = 0L
+            scrollMaxX = absNX; scrollMaxY = absNY
+            scrollHoldStart = now; scrollLastDispatch = 0L
             cursorOverlay.setScrollDir(scrollDirX, scrollDirY)
             resetDwell()
             DebugLog.d(TAG, "Scroll dir=(${scrollDirX},${scrollDirY})")
         }
     }
 
-    // ── Head shake → back ──
-
-    override fun onRawYaw(yaw: Float) {
-        if (!isActive || !shakeBackEnabled) return
-
-        val now = System.currentTimeMillis()
-        if (now < shakeCooldownUntil) return
-
-        val dir = when {
-            yaw > SHAKE_THRESHOLD -> +1
-            yaw < -SHAKE_THRESHOLD -> -1
-            else -> 0
-        }
-
-        if (dir != 0 && dir != shakeLastDirection) {
-            shakeLastDirection = dir
-            shakeCrossings.add(now)
-            shakeCrossings.removeAll { now - it > SHAKE_WINDOW_MS }
-
-            // Fast lateral movement — reset circle detector to avoid false circle
-            resetCircleDetector()
-
-            if (shakeCrossings.size >= SHAKE_2_CROSSINGS) {
-                shakeCrossings.clear()
-                shakeLastDirection = 0
-                shakeCooldownUntil = now + SHAKE_COOLDOWN_MS
-                DebugLog.i(TAG, "Shake x2 → BACK")
-                performGlobalAction(GLOBAL_ACTION_BACK)
-            }
-        }
-    }
-
-    // ── Dwell logic ──
-
-    private fun resetDwell() {
-        dwellAnchorX = cursorX
-        dwellAnchorY = cursorY
-        dwellStartTime = System.currentTimeMillis()
-        dwellFired = false
-        cursorOverlay.setDwellProgress(0f)
-    }
-
-    private fun isDwellActive(): Boolean {
-        // Dwell runs for: dwell mode, autoclick, scroll-ready (anchor), or scrolling (exit via dwell when neutral)
-        return dwellEnabled || autoClickEnabled || scrollState != ScrollState.NORMAL
-    }
-
-    private fun updateDwellProgress() {
-        if (!isDwellActive() || !isActive || dwellFired) return
-
-        val now = System.currentTimeMillis()
-        if (now < dwellCooldownUntil) return
-
-        val dx = cursorX - dwellAnchorX
-        val dy = cursorY - dwellAnchorY
-        val dist = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
-
-        if (dist > dwellRadius) {
-            resetDwell()
-            return
-        }
-
-        // SCROLLING: dwell only runs when neutral AND eligible to exit
-        if (scrollState == ScrollState.SCROLLING) {
-            // Not neutral (actively scrolling) → no dwell
-            if (scrollDirX != 0f || scrollDirY != 0f) return
-            // Neutral but not eligible yet (no swipe done AND < 3s since anchor)
-            val eligibleToExit = scrollEverSwiped || (now - scrollAnchorTime >= 3000L)
-            if (!eligibleToExit) return
-        }
-
-        val elapsed = now - dwellStartTime
-        if (elapsed < dwellDelay) return
-
-        val activeElapsed = elapsed - dwellDelay
-        val progress = (activeElapsed.toFloat() / dwellDuration).coerceIn(0f, 1f)
-        cursorOverlay.setDwellProgress(progress)
-
-        if (activeElapsed >= dwellDuration) {
-            dwellFired = true
-            dwellCooldownUntil = now + dwellDelay
-
-            when (scrollState) {
-                ScrollState.SCROLL_READY -> {
-                    DebugLog.i(TAG, "Dwell → anchor at (${cursorX.toInt()}, ${cursorY.toInt()})")
-                    enterScrolling()
-                    mainHandler.postDelayed({ resetDwell() }, dwellDelay)
-                }
-                ScrollState.SCROLLING -> {
-                    DebugLog.i(TAG, "Dwell → exit scroll (anchor released)")
-                    exitScrollMode()
-                }
-                ScrollState.NORMAL -> {
-                    DebugLog.i(TAG, "Dwell click at (${cursorX.toInt()}, ${cursorY.toInt()})")
-                    performClick()
-                    if (!dwellEnabled && autoClickEnabled) {
-                        // Auto-click mode: recenter cursor after click (slightly above center for glasses display)
-                        cursorX = screenWidth / 2f
-                        cursorY = screenHeight * (recenterYPct / 100f)
-                        cursorOverlay.updatePosition(cursorX, cursorY)
-                        DebugLog.i(TAG, "Auto-click recenter")
-                    }
-                    mainHandler.postDelayed({ resetDwell() }, dwellDelay)
-                }
-            }
-        }
-    }
-
-    // ── HeadTracker.Listener ──
-
-    override fun onHeadMove(deltaX: Float, deltaY: Float): HeadTracker.ClampResult {
-        if (!isActive) {
-            // Passive mode: track virtual position for circle detection only
-            if (circleToggleEnabled) {
-                circleVirtualX = (circleVirtualX + deltaX).coerceIn(0f, screenWidth - 1f)
-                circleVirtualY = (circleVirtualY + deltaY).coerceIn(0f, screenHeight - 1f)
-                feedCircleDetector(circleVirtualX, circleVirtualY)
-            }
-            return HeadTracker.ClampResult(false, false)
-        }
-
-        // SCROLL_READY: cursor moves freely, dwell anchors
-        // (falls through to normal cursor movement below)
-
-        // SCROLLING: cursor locked, track virtual position for joystick
-        if (scrollState == ScrollState.SCROLLING) {
-            scrollVirtualX = (scrollVirtualX + deltaX).coerceIn(-300f, 300f)
-            scrollVirtualY = (scrollVirtualY + deltaY).coerceIn(-300f, 300f)
-            updateJoystickScroll()
-            return HeadTracker.ClampResult(false, false)
-        }
-
-        val newX = (cursorX + deltaX).coerceIn(0f, screenWidth - 1f)
-        val newY = (cursorY + deltaY).coerceIn(0f, screenHeight - 1f)
-
-        val clampedX = newX != cursorX + deltaX
-        val clampedY = newY != cursorY + deltaY
-
-        cursorX = newX
-        cursorY = newY
-        cursorOverlay.updatePosition(cursorX, cursorY)
-
-        // Feed circle gesture detector (only in normal mode)
-        if (scrollState == ScrollState.NORMAL) {
-            feedCircleDetector(cursorX, cursorY)
-        }
-
-        return HeadTracker.ClampResult(clampedX, clampedY)
-    }
-
     private fun dispatchSwipe(dx: Float, dy: Float) {
-        // Offset start 60px in swipe direction so touch-down avoids tapping anchor element
         val offsetX = if (dx != 0f) dx / kotlin.math.abs(dx) * 60f else 0f
         val offsetY = if (dy != 0f) dy / kotlin.math.abs(dy) * 60f else 0f
         val sx = (cursorX + offsetX).coerceIn(20f, screenWidth - 20f)
@@ -767,76 +540,161 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         if (dist < 10.0) return
 
         DebugLog.d(TAG, "Swipe (${sx.toInt()},${sy.toInt()})→(${endX.toInt()},${endY.toInt()}) dist=${dist.toInt()}")
-
-        val path = Path()
-        path.moveTo(sx, sy)
-        path.lineTo(endX, endY)
-
+        val path = Path().apply { moveTo(sx, sy); lineTo(endX, endY) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, SCROLL_GESTURE_MS))
             .build()
-
         dispatchGesture(gesture, null, null)
     }
 
-    // ── Circle gesture detection ──
+    // ══════════════════════════════════════════
+    //  Nod detection
+    // ══════════════════════════════════════════
+
+    override fun onRawPitch(pitch: Float) {
+        if (!isActive) return
+        val now = System.currentTimeMillis()
+        if (now < nodCooldownUntil) return
+
+        val absPitch = kotlin.math.abs(pitch)
+        if (!nodInPeak) {
+            if (absPitch > NOD_PEAK_THRESHOLD) {
+                nodInPeak = true
+                nodPeakDir = if (pitch > 0) +1 else -1
+            }
+        } else if (absPitch < NOD_RETURN_THRESHOLD) {
+            nodInPeak = false
+            nodPeaks.removeAll { now - it.time > NOD_WINDOW_MS }
+            nodPeaks.add(NodPeak(now, nodPeakDir))
+            DebugLog.d(TAG, "Nod peak #${nodPeaks.size} dir=${nodPeakDir}")
+
+            if (nodPeaks.size >= 4) {
+                val last4 = nodPeaks.takeLast(4)
+                val alternating = (0 until 3).all { last4[it].dir != last4[it + 1].dir }
+                if (alternating) {
+                    val firstDir = last4[0].dir
+                    nodPeaks.clear()
+                    nodCooldownUntil = now + NOD_COOLDOWN_MS
+                    DebugLog.i(TAG, "Nod x2 detected, firstDir=$firstDir")
+
+                    if (scrollState != ScrollState.NORMAL) {
+                        exitScrollMode()
+                    } else if (firstDir == +1) {
+                        if (dwellEnabled) {
+                            DebugLog.d(TAG, "Scroll blocked — dwell mode active")
+                        } else {
+                            enterScrollReady()
+                        }
+                    } else {
+                        setDwellMode(!dwellEnabled)
+                    }
+                }
+            }
+            nodPeakDir = 0
+        }
+    }
+
+    // ══════════════════════════════════════════
+    //  Head shake → back
+    // ══════════════════════════════════════════
+
+    override fun onRawYaw(yaw: Float) {
+        if (!isActive || !shakeBackEnabled) return
+        val now = System.currentTimeMillis()
+        if (now < shakeCooldownUntil) return
+
+        val dir = when {
+            yaw > SHAKE_THRESHOLD -> +1
+            yaw < -SHAKE_THRESHOLD -> -1
+            else -> 0
+        }
+        if (dir != 0 && dir != shakeLastDirection) {
+            shakeLastDirection = dir
+            shakeCrossings.add(now)
+            shakeCrossings.removeAll { now - it > SHAKE_WINDOW_MS }
+            resetCircleDetector()
+            if (shakeCrossings.size >= SHAKE_2_CROSSINGS) {
+                shakeCrossings.clear()
+                shakeLastDirection = 0
+                shakeCooldownUntil = now + SHAKE_COOLDOWN_MS
+                DebugLog.i(TAG, "Shake x2 → BACK")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            }
+        }
+    }
+
+    // ══════════════════════════════════════════
+    //  HeadTracker.Listener — cursor movement
+    // ══════════════════════════════════════════
+
+    override fun onHeadMove(deltaX: Float, deltaY: Float): HeadTracker.ClampResult {
+        if (!isActive) {
+            if (circleToggleEnabled) {
+                circleVirtualX = (circleVirtualX + deltaX).coerceIn(0f, screenWidth - 1f)
+                circleVirtualY = (circleVirtualY + deltaY).coerceIn(0f, screenHeight - 1f)
+                feedCircleDetector(circleVirtualX, circleVirtualY)
+            }
+            return HeadTracker.ClampResult(false, false)
+        }
+
+        if (scrollState == ScrollState.SCROLLING) {
+            scrollVirtualX = (scrollVirtualX + deltaX).coerceIn(-300f, 300f)
+            scrollVirtualY = (scrollVirtualY + deltaY).coerceIn(-300f, 300f)
+            updateJoystickScroll()
+            return HeadTracker.ClampResult(false, false)
+        }
+
+        val newX = (cursorX + deltaX).coerceIn(0f, screenWidth - 1f)
+        val newY = (cursorY + deltaY).coerceIn(0f, screenHeight - 1f)
+        val clampedX = newX != cursorX + deltaX
+        val clampedY = newY != cursorY + deltaY
+        cursorX = newX
+        cursorY = newY
+        cursorOverlay.updatePosition(cursorX, cursorY)
+
+        if (scrollState == ScrollState.NORMAL) feedCircleDetector(cursorX, cursorY)
+        return HeadTracker.ClampResult(clampedX, clampedY)
+    }
+
+    // ══════════════════════════════════════════
+    //  Circle gesture detection
+    // ══════════════════════════════════════════
 
     private fun feedCircleDetector(x: Float, y: Float) {
         val now = System.currentTimeMillis()
         if (now < circleCooldownUntil) return
-
-        // Sample at intervals
         if (circlePoints.isNotEmpty() && now - circlePoints.last().time < CIRCLE_SAMPLE_MS) return
 
         circlePoints.add(CPoint(x, y, now))
 
-        // Expire old points — single circle must complete within max time
-        if (circlePoints.size > 1) {
-            val oldest = circlePoints.first().time
-            if (now - oldest > CIRCLE_MAX_TIME_MS) {
-                // Drop oldest point and reduce accumulated angle proportionally
-                circlePoints.removeAt(0)
-                // Conservative: reset angle if too old to avoid drift
-                if (circlePoints.size < 3) circleAccAngle = 0f
-            }
+        if (circlePoints.size > 1 && now - circlePoints.first().time > CIRCLE_MAX_TIME_MS) {
+            circlePoints.removeAt(0)
+            if (circlePoints.size < 3) circleAccAngle = 0f
         }
-
         if (circlePoints.size < 3) return
 
-        // Compute turning angle from last 3 points
         val p0 = circlePoints[circlePoints.size - 3]
         val p1 = circlePoints[circlePoints.size - 2]
         val p2 = circlePoints[circlePoints.size - 1]
-
-        val v1x = p1.x - p0.x
-        val v1y = p1.y - p0.y
-        val v2x = p2.x - p1.x
-        val v2y = p2.y - p1.y
-
+        val v1x = p1.x - p0.x; val v1y = p1.y - p0.y
+        val v2x = p2.x - p1.x; val v2y = p2.y - p1.y
         val len1 = Math.sqrt((v1x * v1x + v1y * v1y).toDouble()).toFloat()
         val len2 = Math.sqrt((v2x * v2x + v2y * v2y).toDouble()).toFloat()
+        if (len1 < 2f || len2 < 2f) return
 
-        if (len1 < 2f || len2 < 2f) return  // skip tiny movements
+        circleAccAngle += Math.atan2((v1x * v2y - v1y * v2x).toDouble(), (v1x * v2x + v1y * v2y).toDouble()).toFloat()
 
-        val cross = v1x * v2y - v1y * v2x
-        val dot = v1x * v2x + v1y * v2y
-        val angle = Math.atan2(cross.toDouble(), dot.toDouble()).toFloat()
-
-        circleAccAngle += angle
-
-        // Check if we completed a circle
         if (kotlin.math.abs(circleAccAngle) >= CIRCLE_ANGLE_THRESHOLD) {
             val span = computeCircleSpan()
             val shape = computeCircleShape()
             DebugLog.d(TAG, "Circle candidate: span=${span.toInt()}px, w=${shape.width.toInt()}, h=${shape.height.toInt()}, aspect=${"%.1f".format(shape.aspect)}")
             if (span >= CIRCLE_MIN_SPAN && shape.width >= CIRCLE_MIN_WIDTH && shape.height >= CIRCLE_MIN_HEIGHT && shape.aspect <= CIRCLE_MAX_ASPECT) {
-                DebugLog.i(TAG, "Circle detected (span=${span.toInt()}px, ${shape.width.toInt()}x${shape.height.toInt()}, aspect=${"%.1f".format(shape.aspect)}) → TOGGLE")
+                DebugLog.i(TAG, "Circle detected → TOGGLE")
                 resetCircleDetector()
                 circleCooldownUntil = now + CIRCLE_COOLDOWN_MS
                 toggleActive()
                 return
             }
-            // Reset for next circle
             circleAccAngle = 0f
             circlePoints.clear()
         }
@@ -867,8 +725,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x
             if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y
         }
-        val w = maxX - minX
-        val h = maxY - minY
+        val w = maxX - minX; val h = maxY - minY
         val aspect = if (w < 1f || h < 1f) Float.MAX_VALUE else maxOf(w / h, h / w)
         return CircleShape(w, h, aspect)
     }
@@ -878,20 +735,18 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         circleAccAngle = 0f
     }
 
-    // ── Key event handling ──
-
-    var appInForeground = false
+    // ══════════════════════════════════════════
+    //  Key event handling
+    // ══════════════════════════════════════════
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (appInForeground) return false
 
         if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount > 0) {
             if (isActive && event.action == KeyEvent.ACTION_UP) {
-                return when (event.keyCode) {
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-                    KeyEvent.KEYCODE_BUTTON_A -> true
-                    else -> false
-                }
+                return event.keyCode in intArrayOf(
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BUTTON_A
+                )
             }
             return false
         }
@@ -899,102 +754,51 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         val now = System.currentTimeMillis()
         val keyCode = event.keyCode
 
+        // Konami command: L L R R → toggle
         if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
             if (now - lastInputTime > COMMAND_TIMEOUT_MS) inputBuffer.clear()
             lastInputTime = now
             inputBuffer.add(keyCode)
-
-            if (inputBuffer.size >= commandSequence.size) {
-                val tail = inputBuffer.takeLast(commandSequence.size)
-                if (tail == commandSequence) {
-                    inputBuffer.clear()
-                    toggleActive()
-                    return true
-                }
+            if (inputBuffer.size >= commandSequence.size &&
+                inputBuffer.takeLast(commandSequence.size) == commandSequence) {
+                inputBuffer.clear()
+                toggleActive()
+                return true
             }
             if (inputBuffer.size > 20) inputBuffer.removeAt(0)
         }
 
-        if (isActive) {
-            when (keyCode) {
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BUTTON_A -> {
-                    performClick()
-                    resetDwell()
-                    return true
-                }
-            }
+        // Click via center/enter
+        if (isActive && keyCode in intArrayOf(
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BUTTON_A)) {
+            performClick()
+            resetDwell()
+            return true
         }
 
         return false
     }
 
+    // ══════════════════════════════════════════
+    //  Click
+    // ══════════════════════════════════════════
+
     private fun performClick() {
         DebugLog.d(TAG, "Click at (${cursorX.toInt()}, ${cursorY.toInt()})")
-
-        val path = Path()
-        path.moveTo(cursorX, cursorY)
-
+        val path = Path().apply { moveTo(cursorX, cursorY) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
             .build()
-
         dispatchGesture(gesture, object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription) {
-                DebugLog.d(TAG, "Click OK")
-            }
-            override fun onCancelled(gestureDescription: GestureDescription) {
-                DebugLog.w(TAG, "Click cancelled")
-            }
+            override fun onCompleted(gestureDescription: GestureDescription) { DebugLog.d(TAG, "Click OK") }
+            override fun onCancelled(gestureDescription: GestureDescription) { DebugLog.w(TAG, "Click cancelled") }
         }, null)
-
         cursorOverlay.flashClick()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
-
-    override fun onInterrupt() {
-        DebugLog.w(TAG, "Service interrupted")
-    }
-
-    @Suppress("DEPRECATION")
-    private fun acquireWakeLock() {
-        if (wakeLock == null) {
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = pm.newWakeLock(
-                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
-                "GazeMou:HeadMouse"
-            )
-        }
-        wakeLock?.acquire()
-    }
-
-    private fun releaseWakeLock() {
-        wakeLock?.let { if (it.isHeld) it.release() }
-    }
-
-    /** Keep CPU alive for gyro sensor events while display is off (circle detection). */
-    private fun acquirePassiveWakeLock() {
-        if (passiveWakeLock == null) {
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            passiveWakeLock = pm.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "GazeMou:PassiveCircle"
-            )
-        }
-        if (passiveWakeLock?.isHeld != true) {
-            passiveWakeLock?.acquire()
-            DebugLog.i(TAG, "Passive wake lock acquired")
-        }
-    }
-
-    private fun releasePassiveWakeLock() {
-        passiveWakeLock?.let {
-            if (it.isHeld) {
-                it.release()
-                DebugLog.i(TAG, "Passive wake lock released")
-            }
-        }
-    }
+    // ══════════════════════════════════════════
+    //  Broadcast
+    // ══════════════════════════════════════════
 
     private fun broadcastStatus() {
         val intent = Intent(ACTION_STATUS_CHANGED).apply {
