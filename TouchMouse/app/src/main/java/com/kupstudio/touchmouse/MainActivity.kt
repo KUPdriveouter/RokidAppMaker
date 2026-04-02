@@ -18,7 +18,7 @@ class MainActivity : AppCompatActivity() {
     // Depth 1: navigate items, Depth 2: edit selected item
     private var depth = 1
 
-    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DW_TIME, DW_DLY, DW_RAD, SHAKE, CIRCLE }
+    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DW_TIME, DW_DLY, DW_RAD, SHAKE, CIRCLE, AUTOCLICK, RECENTER }
     private val items = Item.entries.toList()
     private var selectedIdx = 0
 
@@ -113,6 +113,12 @@ class MainActivity : AppCompatActivity() {
                             }
                             render()
                         }
+                        Item.AUTOCLICK -> {
+                            TouchMouseService.instance?.let {
+                                it.setAutoClickEnabled(!it.autoClickEnabled)
+                            }
+                            render()
+                        }
                         else -> enterDepth2()
                     }
                 }
@@ -195,6 +201,15 @@ class MainActivity : AppCompatActivity() {
                     it.setCircleToggleEnabled(!it.circleToggleEnabled)
                 }
             }
+            Item.AUTOCLICK -> {
+                TouchMouseService.instance?.let {
+                    it.setAutoClickEnabled(!it.autoClickEnabled)
+                }
+            }
+            Item.RECENTER -> {
+                val svc = TouchMouseService.instance ?: return
+                svc.updateRecenterY(svc.recenterYPct + dir * 5)
+            }
         }
     }
 
@@ -210,6 +225,8 @@ class MainActivity : AppCompatActivity() {
         val dwellRad = svc?.dwellRadius?.toInt() ?: 30
         val shakeOn = svc?.shakeBackEnabled == true
         val circleOn = svc?.circleToggleEnabled == true
+        val autoClickOn = svc?.autoClickEnabled == true
+        val recenterY = svc?.recenterYPct ?: 40
         val sel = selectedIdx
         val editing = depth == 2
 
@@ -237,6 +254,10 @@ class MainActivity : AppCompatActivity() {
         binding.tvValue7.text = if (shakeOn) "ON" else "OFF"
         binding.tvLabel8.text = "${marker(8)} CIRCLE"
         binding.tvValue8.text = if (circleOn) "ON" else "OFF"
+        binding.tvLabel9.text = "${marker(9)} A.CLICK"
+        binding.tvValue9.text = if (autoClickOn) "ON" else "OFF"
+        binding.tvLabel10.text = "${marker(10)} CTR.Y"
+        binding.tvValue10.text = "${recenterY}%"
 
         val bright = getColor(R.color.hud_green_bright)
         val normal = getColor(R.color.hud_green)
@@ -259,6 +280,8 @@ class MainActivity : AppCompatActivity() {
         binding.tvLabel6.setTextColor(rowColor(6)); binding.tvValue6.setTextColor(rowColor(6))
         binding.tvLabel7.setTextColor(rowColor(7)); binding.tvValue7.setTextColor(rowColor(7))
         binding.tvLabel8.setTextColor(rowColor(8)); binding.tvValue8.setTextColor(rowColor(8))
+        binding.tvLabel9.setTextColor(rowColor(9)); binding.tvValue9.setTextColor(rowColor(9))
+        binding.tvLabel10.setTextColor(rowColor(10)); binding.tvValue10.setTextColor(rowColor(10))
         binding.tvHint.text = if (editing) {
             "<  swipe: adjust  |  tap/back: done  >"
         } else {
