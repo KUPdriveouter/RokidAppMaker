@@ -4,13 +4,13 @@
     android:layout_height="match_parent"
     android:background="@color/solid_black">
 
-    <!-- App title top-left -->
+    <!-- App title + version top-left -->
     <TextView
+        android:id="@+id/tvTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|start"
         android:fontFamily="monospace"
-        android:text="@string/app_name"
         android:textColor="@color/hud_green_dim"
         android:textSize="10sp"
         android:padding="10dp" />
@@ -174,7 +174,7 @@
             android:background="@color/hud_green_dim"
             android:alpha="0.3" />
 
-        <!-- Row 4: DWELL -->
+        <!-- Row 4: DW.TIME -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -207,7 +207,7 @@
             android:background="@color/hud_green_dim"
             android:alpha="0.3" />
 
-        <!-- Row 5: DWELL.T -->
+        <!-- Row 5: DW.DLY -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -240,7 +240,7 @@
             android:background="@color/hud_green_dim"
             android:alpha="0.3" />
 
-        <!-- Row 6: DW.DLY -->
+        <!-- Row 6: DW.RAD -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -273,7 +273,7 @@
             android:background="@color/hud_green_dim"
             android:alpha="0.3" />
 
-        <!-- Row 7: DW.RAD -->
+        <!-- Row 7: SW.LEN -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -293,72 +293,6 @@
 
             <TextView
                 android:id="@+id/tvValue7"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:fontFamily="monospace"
-                android:textSize="15sp" />
-        </LinearLayout>
-
-        <!-- Separator -->
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/hud_green_dim"
-            android:alpha="0.3" />
-
-        <!-- Row 8: SHAKE -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp">
-
-            <TextView
-                android:id="@+id/tvLabel8"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:fontFamily="monospace"
-                android:textSize="15sp"
-                android:letterSpacing="0.05" />
-
-            <TextView
-                android:id="@+id/tvValue8"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:fontFamily="monospace"
-                android:textSize="15sp" />
-        </LinearLayout>
-
-        <!-- Separator -->
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/hud_green_dim"
-            android:alpha="0.3" />
-
-        <!-- Row 9: RECTR -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp">
-
-            <TextView
-                android:id="@+id/tvLabel9"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:fontFamily="monospace"
-                android:textSize="15sp"
-                android:letterSpacing="0.05" />
-
-            <TextView
-                android:id="@+id/tvValue9"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:fontFamily="monospace"

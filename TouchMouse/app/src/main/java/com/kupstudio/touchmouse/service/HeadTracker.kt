@@ -31,6 +31,10 @@ class HeadTracker(context: Context) : SensorEventListener {
         fun onHeadMove(deltaX: Float, deltaY: Float): ClampResult
         /** Raw yaw angular velocity in rad/s (after smoothing) */
         fun onRawYaw(yaw: Float) {}
+        /** Raw pitch angular velocity in rad/s (after smoothing) */
+        fun onRawPitch(pitch: Float) {}
+        /** Both axes together for combined detection */
+        fun onRawGyro(yaw: Float, pitch: Float) {}
     }
 
     data class ClampResult(val clampedX: Boolean, val clampedY: Boolean)
@@ -109,8 +113,10 @@ class HeadTracker(context: Context) : SensorEventListener {
         val dx = -smoothX * dt * sensitivityX
         val dy = -smoothY * dt * sensitivityY
 
-        // Always report raw yaw for gesture detection (even in dead zone)
+        // Always report raw gyro for gesture detection (even in dead zone)
         listener?.onRawYaw(smoothX)
+        listener?.onRawPitch(smoothY)
+        listener?.onRawGyro(smoothX, smoothY)
 
         if (abs(dx) > 0.1f || abs(dy) > 0.1f) {
             val result = listener?.onHeadMove(dx, dy)

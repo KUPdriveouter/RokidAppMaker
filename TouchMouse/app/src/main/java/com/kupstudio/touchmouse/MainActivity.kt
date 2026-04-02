@@ -18,7 +18,7 @@ class MainActivity : AppCompatActivity() {
     // Depth 1: navigate items, Depth 2: edit selected item
     private var depth = 1
 
-    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DWELL, DW_TIME, DW_DLY, DW_RAD, SHAKE, RECTR }
+    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DW_TIME, DW_DLY, DW_RAD, SHAKE }
     private val items = Item.entries.toList()
     private var selectedIdx = 0
 
@@ -36,6 +36,9 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        val versionName = packageManager.getPackageInfo(packageName, 0).versionName
+        binding.tvTitle.text = "${getString(R.string.app_name)} v$versionName"
 
         registerReceiver(
             statusReceiver,
@@ -92,28 +95,15 @@ class MainActivity : AppCompatActivity() {
                 if (depth == 2) {
                     exitDepth2()
                 } else {
-                    // Depth 1
                     when (items[selectedIdx]) {
                         Item.SERVICE -> openAccessibilitySettings()
                         Item.TOGGLE -> {
                             TouchMouseService.instance?.toggleActive()
                             render()
                         }
-                        Item.DWELL -> {
-                            TouchMouseService.instance?.let {
-                                it.setDwellEnabled(!it.dwellEnabled)
-                            }
-                            render()
-                        }
                         Item.SHAKE -> {
                             TouchMouseService.instance?.let {
                                 it.setShakeBackEnabled(!it.shakeBackEnabled)
-                            }
-                            render()
-                        }
-                        Item.RECTR -> {
-                            TouchMouseService.instance?.let {
-                                it.setRecenterEnabled(!it.recenterEnabled)
                             }
                             render()
                         }
@@ -127,7 +117,6 @@ class MainActivity : AppCompatActivity() {
                     exitDepth2()
                     return true
                 }
-                // depth 1: normal back = exit app
                 return super.onKeyDown(keyCode, event)
             }
         }
@@ -137,20 +126,16 @@ class MainActivity : AppCompatActivity() {
     private fun enterDepth2() {
         depth = 2
         val item = items[selectedIdx]
-        // Show pointer for sensitivity preview
         if (item == Item.SENS_X || item == Item.SENS_Y) {
             val svc = TouchMouseService.instance
             wasActiveBeforeEdit = svc?.isActive() == true
-            if (!wasActiveBeforeEdit) {
-                svc?.toggleActive()
-            }
+            if (!wasActiveBeforeEdit) svc?.toggleActive()
         }
         render()
     }
 
     private fun exitDepth2() {
         val item = items[selectedIdx]
-        // Restore pointer state if it was off
         if (item == Item.SENS_X || item == Item.SENS_Y) {
             if (!wasActiveBeforeEdit) {
                 TouchMouseService.instance?.let {
@@ -165,11 +150,8 @@ class MainActivity : AppCompatActivity() {
     private fun adjustDepth2(dir: Int) {
         val prefs = getSharedPreferences(TouchMouseService.PREFS_NAME, MODE_PRIVATE)
         when (items[selectedIdx]) {
-            Item.SERVICE -> {} // no adjustment
-            Item.TOGGLE -> {
-                // Left/right toggles on/off
-                TouchMouseService.instance?.toggleActive()
-            }
+            Item.SERVICE -> {}
+            Item.TOGGLE -> TouchMouseService.instance?.toggleActive()
             Item.SENS_X -> {
                 val cur = prefs.getFloat(TouchMouseService.PREF_SENSITIVITY_X, 150f)
                 val new = (cur + dir * 50f).coerceIn(50f, 2000f)
@@ -181,11 +163,6 @@ class MainActivity : AppCompatActivity() {
                 val new = (cur + dir * 100f).coerceIn(100f, 8000f)
                 prefs.edit().putFloat(TouchMouseService.PREF_SENSITIVITY_Y, new).apply()
                 TouchMouseService.instance?.updateSensitivityY(new)
-            }
-            Item.DWELL -> {
-                TouchMouseService.instance?.let {
-                    it.setDwellEnabled(!it.dwellEnabled)
-                }
             }
             Item.DW_TIME -> {
                 val svc = TouchMouseService.instance ?: return
@@ -207,11 +184,6 @@ class MainActivity : AppCompatActivity() {
                     it.setShakeBackEnabled(!it.shakeBackEnabled)
                 }
             }
-            Item.RECTR -> {
-                TouchMouseService.instance?.let {
-                    it.setRecenterEnabled(!it.recenterEnabled)
-                }
-            }
         }
     }
 
@@ -222,12 +194,10 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences(TouchMouseService.PREFS_NAME, MODE_PRIVATE)
         val sensX = prefs.getFloat(TouchMouseService.PREF_SENSITIVITY_X, 150f).toInt()
         val sensY = prefs.getFloat(TouchMouseService.PREF_SENSITIVITY_Y, 3500f).toInt()
-        val dwellOn = svc?.dwellEnabled == true
         val dwellSec = (svc?.dwellDuration ?: 3000L) / 1000f
         val dwellDlySec = (svc?.dwellDelay ?: 1000L) / 1000f
         val dwellRad = svc?.dwellRadius?.toInt() ?: 30
         val shakeOn = svc?.shakeBackEnabled == true
-        val recenterOn = svc?.recenterEnabled == true
         val sel = selectedIdx
         val editing = depth == 2
 
@@ -245,19 +215,15 @@ class MainActivity : AppCompatActivity() {
         binding.tvValue2.text = sensX.toString()
         binding.tvLabel3.text = "${marker(3)} V.SENS"
         binding.tvValue3.text = sensY.toString()
-        binding.tvLabel4.text = "${marker(4)} DWELL"
-        binding.tvValue4.text = if (dwellOn) "ON" else "OFF"
-        binding.tvLabel5.text = "${marker(5)} DW.TIME"
-        binding.tvValue5.text = "${dwellSec}s"
-        binding.tvLabel6.text = "${marker(6)} DW.DLY"
-        binding.tvValue6.text = "${dwellDlySec}s"
-        binding.tvLabel7.text = "${marker(7)} DW.RAD"
-        binding.tvValue7.text = "${dwellRad}px"
-        binding.tvLabel8.text = "${marker(8)} SHAKE"
-        binding.tvValue8.text = if (shakeOn) "ON" else "OFF"
-        binding.tvLabel9.text = "${marker(9)} RECTR"
-        binding.tvValue9.text = if (recenterOn) "ON" else "OFF"
-        // Highlight colors
+        binding.tvLabel4.text = "${marker(4)} DW.TIME"
+        binding.tvValue4.text = "${dwellSec}s"
+        binding.tvLabel5.text = "${marker(5)} DW.DLY"
+        binding.tvValue5.text = "${dwellDlySec}s"
+        binding.tvLabel6.text = "${marker(6)} DW.RAD"
+        binding.tvValue6.text = "${dwellRad}px"
+        binding.tvLabel7.text = "${marker(7)} SHAKE"
+        binding.tvValue7.text = if (shakeOn) "ON" else "OFF"
+
         val bright = getColor(R.color.hud_green_bright)
         val normal = getColor(R.color.hud_green)
         val dim = getColor(R.color.hud_green_dim)
@@ -269,7 +235,6 @@ class MainActivity : AppCompatActivity() {
             else -> dim
         }
 
-        // SERVICE row: red if disabled
         binding.tvLabel0.setTextColor(rowColor(0))
         binding.tvValue0.setTextColor(if (enabled) rowColor(0) else red)
         binding.tvLabel1.setTextColor(rowColor(1)); binding.tvValue1.setTextColor(rowColor(1))
@@ -279,12 +244,10 @@ class MainActivity : AppCompatActivity() {
         binding.tvLabel5.setTextColor(rowColor(5)); binding.tvValue5.setTextColor(rowColor(5))
         binding.tvLabel6.setTextColor(rowColor(6)); binding.tvValue6.setTextColor(rowColor(6))
         binding.tvLabel7.setTextColor(rowColor(7)); binding.tvValue7.setTextColor(rowColor(7))
-        binding.tvLabel8.setTextColor(rowColor(8)); binding.tvValue8.setTextColor(rowColor(8))
-        binding.tvLabel9.setTextColor(rowColor(9)); binding.tvValue9.setTextColor(rowColor(9))
         binding.tvHint.text = if (editing) {
             "<  swipe: adjust  |  tap/back: done  >"
         } else {
-            "<  swipe: select  |  tap: enter  |  back: exit  >\nToggle anywhere: swipe L L R R"
+            "<  swipe: select  |  tap: enter  |  back: exit  >\nToggle anywhere: swipe L L R R\nNod down x2: dwell | Nod up x2: scroll"
         }
         binding.tvDepth.text = if (editing) "[EDIT]" else ""
     }
