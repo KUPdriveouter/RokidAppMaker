@@ -10,8 +10,11 @@ import android.content.SharedPreferences
 import android.graphics.Path
 import android.os.Handler
 import android.os.Looper
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.os.PowerManager
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import com.kupstudio.touchmouse.util.DebugLog
 
 class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
@@ -20,6 +23,8 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         private const val TAG = "TouchMouseSvc"
 
         const val ACTION_TOGGLE = "com.kupstudio.touchmouse.TOGGLE"
+        const val ACTION_LAUNCHER_SCROLL = "com.kupstudio.touchmouse.LAUNCHER_SCROLL"
+        const val EXTRA_DIRECTION = "direction" // "forward" or "backward"
         const val ACTION_STATUS_CHANGED = "com.kupstudio.touchmouse.STATUS_CHANGED"
         const val EXTRA_ACTIVE = "active"
 
@@ -30,6 +35,13 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         const val PREF_DWELL_RADIUS = "dwell_radius"
         const val PREF_DWELL_DELAY = "dwell_delay"
         const val PREF_SHAKE_BACK_ENABLED = "shake_back_enabled"
+        const val PREF_AWAKE_ENABLED = "awake_enabled"
+        const val PREF_AWAKE_AUTO_CURSOR = "awake_auto_cursor"
+        const val PREF_AUTO_FOCUS = "auto_focus"
+
+        // Auto focus (drift to center when idle)
+        private const val AUTO_FOCUS_IDLE_MS = 600L     // start after 600ms idle
+        private const val AUTO_FOCUS_SPEED = 1.5f       // pixels per tick (50ms) ≈ 30px/sec
 
         private const val DEFAULT_SENSITIVITY_X = 150f
         private const val DEFAULT_SENSITIVITY_Y = 3500f
@@ -37,11 +49,12 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         private const val DEFAULT_DWELL_RADIUS = 50f
         private const val DEFAULT_DWELL_DELAY = 1000L
 
-        // Head shake detection
-        private const val SHAKE_THRESHOLD = 1.5f
-        private const val SHAKE_WINDOW_MS = 1200L
-        private const val SHAKE_2_CROSSINGS = 4
-        private const val SHAKE_COOLDOWN_MS = 600L
+        // Head shake detection — moderate deliberate motion
+        private const val SHAKE_THRESHOLD = 2.0f        // moderate head turn (not walking, not extreme)
+        private const val SHAKE_WINDOW_MS = 2500L       // allow relaxed pace
+        private const val SHAKE_2_CROSSINGS = 3          // 1.5 shakes: left-right-left
+        private const val SHAKE_COOLDOWN_MS = 800L
+        private const val SHAKE_MIN_INTERVAL_MS = 250L  // ignore rapid micro-oscillations (walking/car)
 
         // Nod detection (pitch axis) — peak-based
         private const val NOD_PEAK_THRESHOLD = 0.5f
@@ -103,8 +116,9 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private val dwellTickRunnable = object : Runnable {
         override fun run() {
             if (!isActive) return
-            if (!dwellEnabled && scrollState == ScrollState.NORMAL) return
+            if (!dwellEnabled && !autoFocusEnabled && scrollState == ScrollState.NORMAL) return
             updateDwellProgress()
+            updateAutoFocus()
             dwellHandler.postDelayed(this, 50)
         }
     }
@@ -148,6 +162,13 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
 
     var shakeBackEnabled = false
         private set
+    var awakeEnabled = false
+        private set
+    var awakeAutoCursor = false
+        private set
+    var autoFocusEnabled = false
+        private set
+    private var lastCursorMoveTime = 0L
     private val shakeCrossings = mutableListOf<Long>()
     private var shakeLastDirection = 0
     private var shakeCooldownUntil = 0L
@@ -179,7 +200,13 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
 
     private val toggleReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == ACTION_TOGGLE) toggleActive()
+            when (intent.action) {
+                ACTION_TOGGLE -> toggleActive()
+                ACTION_LAUNCHER_SCROLL -> {
+                    val dir = intent.getStringExtra(EXTRA_DIRECTION) ?: "forward"
+                    scrollLauncherPage(dir == "forward")
+                }
+            }
         }
     }
 
@@ -213,7 +240,13 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         dwellRadius = prefs.getFloat(PREF_DWELL_RADIUS, DEFAULT_DWELL_RADIUS)
         dwellDelay = prefs.getLong(PREF_DWELL_DELAY, DEFAULT_DWELL_DELAY)
         shakeBackEnabled = prefs.getBoolean(PREF_SHAKE_BACK_ENABLED, false)
-        registerReceiver(toggleReceiver, IntentFilter(ACTION_TOGGLE), RECEIVER_NOT_EXPORTED)
+        awakeEnabled = prefs.getBoolean(PREF_AWAKE_ENABLED, false)
+        awakeAutoCursor = prefs.getBoolean(PREF_AWAKE_AUTO_CURSOR, false)
+        autoFocusEnabled = prefs.getBoolean(PREF_AUTO_FOCUS, false)
+        registerReceiver(toggleReceiver, IntentFilter().apply {
+            addAction(ACTION_TOGGLE)
+            addAction(ACTION_LAUNCHER_SCROLL)
+        }, RECEIVER_NOT_EXPORTED)
         registerReceiver(screenReceiver, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
@@ -223,7 +256,13 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        DebugLog.i(TAG, "Accessibility service connected")
+        // Ensure flags are set programmatically
+        serviceInfo = serviceInfo.apply {
+            flags = flags or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+        }
+        DebugLog.i(TAG, "Accessibility service connected, flags=0x${serviceInfo.flags.toString(16)}")
 
         val dm = resources.displayMetrics
         screenWidth = dm.widthPixels
@@ -321,6 +360,21 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         prefs.edit().putBoolean(PREF_SHAKE_BACK_ENABLED, enabled).apply()
     }
 
+    fun setAwakeEnabled(enabled: Boolean) {
+        awakeEnabled = enabled
+        prefs.edit().putBoolean(PREF_AWAKE_ENABLED, enabled).apply()
+    }
+
+    fun setAwakeAutoCursor(enabled: Boolean) {
+        awakeAutoCursor = enabled
+        prefs.edit().putBoolean(PREF_AWAKE_AUTO_CURSOR, enabled).apply()
+    }
+
+    fun setAutoFocus(enabled: Boolean) {
+        autoFocusEnabled = enabled
+        prefs.edit().putBoolean(PREF_AUTO_FOCUS, enabled).apply()
+    }
+
     // ==============================
     //  Overlay sync
     // ==============================
@@ -353,7 +407,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         if (on) {
             resetDwell()
             startDwellTicker()
-        } else if (scrollState == ScrollState.NORMAL) {
+        } else if (scrollState == ScrollState.NORMAL && !autoFocusEnabled) {
             dwellHandler.removeCallbacks(dwellTickRunnable)
         }
         syncOverlay()
@@ -422,6 +476,30 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     }
 
     // ==============================
+    //  Auto focus (drift to center when idle)
+    // ==============================
+
+    private fun updateAutoFocus() {
+        if (!autoFocusEnabled || !isActive) return
+        if (dwellEnabled || selectionMode || scrollState != ScrollState.NORMAL) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastCursorMoveTime < AUTO_FOCUS_IDLE_MS) return
+
+        val cx = screenWidth / 2f
+        val cy = screenHeight / 2f
+        val dx = cx - cursorX
+        val dy = cy - cursorY
+        val dist = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+        if (dist < 2f) return  // close enough
+
+        val step = AUTO_FOCUS_SPEED.coerceAtMost(dist)
+        cursorX += dx / dist * step
+        cursorY += dy / dist * step
+        cursorOverlay.updatePosition(cursorX, cursorY)
+    }
+
+    // ==============================
     //  Scroll mode
     // ==============================
 
@@ -463,7 +541,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         scrollDirY = 0f
         if (dwellWasEnabled) dwellEnabled = true
         dwellWasEnabled = false
-        if (dwellEnabled) {
+        if (dwellEnabled || autoFocusEnabled) {
             resetDwell()
             startDwellTicker()
         }
@@ -551,7 +629,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     // ==============================
 
     private fun enterSelectionMode() {
-        if (selectionMode) return
+        if (selectionMode || screenOff) return
         selectionMode = true
         // Pause dwell while in selection
         dwellHandler.removeCallbacks(dwellTickRunnable)
@@ -579,8 +657,8 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         cursorOverlay.setSelectionMode(false)
         cursorOverlay.setSelectionDir(0, 0f)
         syncOverlay()
-        // Resume dwell if enabled
-        if (dwellEnabled) startDwellTicker()
+        // Resume dwell/autoFocus tick
+        if (dwellEnabled || autoFocusEnabled) startDwellTicker()
         DebugLog.i(TAG, "Selection mode OFF")
     }
 
@@ -649,7 +727,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     // ==============================
 
     override fun onRawPitch(pitch: Float) {
-        if (!isActive) return
+        if (!isActive || screenOff) return
         val now = System.currentTimeMillis()
         if (now < nodCooldownUntil) return
 
@@ -667,8 +745,10 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
 
             if (nodPeaks.size >= 4) {
                 val last4 = nodPeaks.takeLast(4)
-                val alternating = (0 until 3).all { last4[it].dir != last4[it + 1].dir }
-                if (alternating) {
+                // Must start with down(-1): down, up, down, up
+                val pattern = last4[0].dir == -1 && last4[1].dir == +1 &&
+                              last4[2].dir == -1 && last4[3].dir == +1
+                if (pattern) {
                     nodPeaks.clear()
                     nodCooldownUntil = now + NOD_COOLDOWN_MS
                     DebugLog.i(TAG, "Nod x2 detected")
@@ -701,32 +781,6 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     // ==============================
 
     override fun onRawYaw(yaw: Float) {
-        // When cursor is OFF: shake turns cursor ON
-        if (!isActive) {
-            val now = System.currentTimeMillis()
-            if (now < shakeCooldownUntil) return
-            val dir = when {
-                yaw > SHAKE_THRESHOLD -> +1
-                yaw < -SHAKE_THRESHOLD -> -1
-                else -> 0
-            }
-            if (dir != 0 && dir != shakeLastDirection) {
-                shakeLastDirection = dir
-                shakeCrossings.add(now)
-                shakeCrossings.removeAll { now - it > SHAKE_WINDOW_MS }
-                if (shakeCrossings.size >= SHAKE_2_CROSSINGS) {
-                    shakeCrossings.clear()
-                    shakeLastDirection = 0
-                    shakeCooldownUntil = now + SHAKE_COOLDOWN_MS
-                    DebugLog.i(TAG, "Shake x2 -> CURSOR ON")
-                    toggleActive()
-                }
-            }
-            return
-        }
-
-        // When cursor is ON: shake = back button (if enabled)
-        if (!shakeBackEnabled) return
         val now = System.currentTimeMillis()
         if (now < shakeCooldownUntil) return
 
@@ -735,17 +789,39 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             yaw < -SHAKE_THRESHOLD -> -1
             else -> 0
         }
-        if (dir != 0 && dir != shakeLastDirection) {
-            shakeLastDirection = dir
-            shakeCrossings.add(now)
-            shakeCrossings.removeAll { now - it > SHAKE_WINDOW_MS }
-            if (shakeCrossings.size >= SHAKE_2_CROSSINGS) {
-                shakeCrossings.clear()
-                shakeLastDirection = 0
-                shakeCooldownUntil = now + SHAKE_COOLDOWN_MS
-                DebugLog.i(TAG, "Shake x2 -> BACK")
-                performGlobalAction(GLOBAL_ACTION_BACK)
-            }
+        if (dir == 0 || dir == shakeLastDirection) return
+
+        // Ignore if too soon after last crossing (filters walking/vibration)
+        if (shakeCrossings.isNotEmpty() && now - shakeCrossings.last() < SHAKE_MIN_INTERVAL_MS) return
+
+        shakeLastDirection = dir
+        shakeCrossings.add(now)
+        shakeCrossings.removeAll { now - it > SHAKE_WINDOW_MS }
+        if (shakeCrossings.size < SHAKE_2_CROSSINGS) return
+
+        // Shake detected!
+        shakeCrossings.clear()
+        shakeLastDirection = 0
+        shakeCooldownUntil = now + SHAKE_COOLDOWN_MS
+
+        // Screen OFF + awake enabled → wake screen + go to apps
+        if (screenOff && awakeEnabled) {
+            DebugLog.i(TAG, "Shake x2 -> AWAKE")
+            performAwake()
+            return
+        }
+
+        // Cursor OFF → cursor ON
+        if (!isActive) {
+            DebugLog.i(TAG, "Shake x2 -> CURSOR ON")
+            toggleActive()
+            return
+        }
+
+        // Cursor ON + shake back → BACK
+        if (shakeBackEnabled) {
+            DebugLog.i(TAG, "Shake x2 -> BACK")
+            performGlobalAction(GLOBAL_ACTION_BACK)
         }
     }
 
@@ -776,6 +852,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         val newY = (cursorY + deltaY).coerceIn(0f, screenHeight - 1f)
         val clampedX = newX != cursorX + deltaX
         val clampedY = newY != cursorY + deltaY
+        if (deltaX != 0f || deltaY != 0f) lastCursorMoveTime = System.currentTimeMillis()
         cursorX = newX
         cursorY = newY
         cursorOverlay.updatePosition(cursorX, cursorY)
@@ -854,9 +931,19 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         wasActiveBeforeScreenOff = isActive
         wasPassiveBeforeScreenOff = !isActive
         headTracker.stop()
+        // Clear nod/shake state to prevent stale triggers on wake
+        nodPeaks.clear()
+        nodInPeak = false
+        shakeCrossings.clear()
+        shakeLastDirection = 0
+        if (awakeEnabled) {
+            // Always start passive for shake-to-awake detection
+            headTracker.startPassive()
+            DebugLog.i(TAG, "Screen OFF — passive sensor ON for awake")
+        }
         dwellHandler.removeCallbacks(dwellTickRunnable)
         mainHandler.removeCallbacks(selectionTickRunnable)
-        DebugLog.i(TAG, "Screen OFF — sensors paused (wasActive=$wasActiveBeforeScreenOff)")
+        DebugLog.i(TAG, "Screen OFF — awake=$awakeEnabled (wasActive=$wasActiveBeforeScreenOff)")
     }
 
     private fun onScreenOn() {
@@ -865,12 +952,85 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         if (wasActiveBeforeScreenOff) {
             headTracker.start()
             if (selectionMode) mainHandler.post(selectionTickRunnable)
-            else if (dwellEnabled || scrollState != ScrollState.NORMAL) startDwellTicker()
+            else if (dwellEnabled || autoFocusEnabled || scrollState != ScrollState.NORMAL) startDwellTicker()
             DebugLog.i(TAG, "Screen ON — sensors resumed (active)")
         } else if (wasPassiveBeforeScreenOff) {
             headTracker.startPassive()
             DebugLog.i(TAG, "Screen ON — sensors resumed (passive)")
         }
+    }
+
+    // ==============================
+    //  Awake (shake to wake + go to apps)
+    // ==============================
+
+    private fun performAwake() {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        @Suppress("DEPRECATION")
+        val wl = pm.newWakeLock(
+            PowerManager.FULL_WAKE_LOCK or
+            PowerManager.ACQUIRE_CAUSES_WAKEUP or
+            PowerManager.ON_AFTER_RELEASE,
+            "TouchMouse:awake"
+        )
+        wl.acquire(5000L)
+
+        // Open app drawer after screen wakes
+        mainHandler.postDelayed({
+            val intent = Intent(this, com.kupstudio.touchmouse.apps.AppDrawerActivity::class.java)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            DebugLog.i(TAG, "Awake: opened AppDrawer")
+
+            if (awakeAutoCursor) {
+                mainHandler.postDelayed({
+                    if (!isActive) toggleActive()
+                    // Enter dwell mode
+                    if (!dwellEnabled) setDwellMode(true)
+                    DebugLog.i(TAG, "Awake: cursor ON + dwell mode")
+                }, 500)
+            }
+        }, 800)
+    }
+
+    // ==============================
+    //  Launcher page scroll
+    // ==============================
+
+    fun scrollLauncherPage(forward: Boolean) {
+        try {
+            val root = rootInActiveWindow
+            if (root == null) {
+                DebugLog.w(TAG, "scrollLauncherPage: rootInActiveWindow is null")
+                // Try via getWindows()
+                val launcherRoot = windows
+                    ?.flatMap { listOfNotNull(it.root) }
+                    ?.firstOrNull { it.packageName == "com.rokid.os.sprite.launcher" }
+                if (launcherRoot != null) {
+                    doScrollNode(launcherRoot, forward)
+                } else {
+                    DebugLog.w(TAG, "scrollLauncherPage: launcher window not found")
+                }
+                return
+            }
+
+            if (root.packageName != "com.rokid.os.sprite.launcher") {
+                DebugLog.w(TAG, "scrollLauncherPage: foreground is ${root.packageName}, not launcher")
+                root.recycle()
+                return
+            }
+
+            doScrollNode(root, forward)
+        } catch (e: Exception) {
+            DebugLog.e(TAG, "scrollLauncherPage error: ${e.message}")
+        }
+    }
+
+    private fun doScrollNode(root: AccessibilityNodeInfo, forward: Boolean) {
+        root.recycle()
+        // Accessibility scroll doesn't actually work due to setUserInputEnabled(false)
+        // Kept for potential future use
+        DebugLog.w(TAG, "doScrollNode: not implemented (launcher restriction)")
     }
 
     // ==============================

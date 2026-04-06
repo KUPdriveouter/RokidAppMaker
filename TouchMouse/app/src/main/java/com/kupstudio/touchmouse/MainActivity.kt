@@ -8,6 +8,8 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.KeyEvent
 import androidx.appcompat.app.AppCompatActivity
+import com.kupstudio.touchmouse.apps.AppPickerActivity
+import com.kupstudio.touchmouse.apps.FavoriteAppsManager
 import com.kupstudio.touchmouse.databinding.ActivityMainBinding
 import com.kupstudio.touchmouse.service.TouchMouseService
 
@@ -16,7 +18,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
 
     private var depth = 1  // 1: navigate, 2: edit
-    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DW_TIME, DW_DLY, DW_RAD, SHAKE }
+    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DW_TIME, DW_DLY, DW_RAD, SHAKE, AWAKE, AWAKE_CURSOR, AUTO_FOCUS, FAVORITES }
     private val items = Item.entries.toList()
     private var selectedIdx = 0
     private var wasActiveBeforeEdit = false
@@ -92,6 +94,21 @@ class MainActivity : AppCompatActivity() {
                 TouchMouseService.instance?.let { it.setShakeBackEnabled(!it.shakeBackEnabled) }
                 render()
             }
+            Item.AWAKE -> {
+                TouchMouseService.instance?.let { it.setAwakeEnabled(!it.awakeEnabled) }
+                render()
+            }
+            Item.AWAKE_CURSOR -> {
+                TouchMouseService.instance?.let { it.setAwakeAutoCursor(!it.awakeAutoCursor) }
+                render()
+            }
+            Item.AUTO_FOCUS -> {
+                TouchMouseService.instance?.let { it.setAutoFocus(!it.autoFocusEnabled) }
+                render()
+            }
+            Item.FAVORITES -> {
+                startActivity(Intent(this, AppPickerActivity::class.java))
+            }
             else -> enterEdit()
         }
     }
@@ -134,6 +151,10 @@ class MainActivity : AppCompatActivity() {
             Item.DW_DLY -> TouchMouseService.instance?.let { it.updateDwellDelay(it.dwellDelay + dir * 250L) }
             Item.DW_RAD -> TouchMouseService.instance?.let { it.updateDwellRadius(it.dwellRadius + dir * 5f) }
             Item.SHAKE -> TouchMouseService.instance?.let { it.setShakeBackEnabled(!it.shakeBackEnabled) }
+            Item.AWAKE -> TouchMouseService.instance?.let { it.setAwakeEnabled(!it.awakeEnabled) }
+            Item.AWAKE_CURSOR -> TouchMouseService.instance?.let { it.setAwakeAutoCursor(!it.awakeAutoCursor) }
+            Item.AUTO_FOCUS -> TouchMouseService.instance?.let { it.setAutoFocus(!it.autoFocusEnabled) }
+            Item.FAVORITES -> {}
         }
     }
 
@@ -141,7 +162,8 @@ class MainActivity : AppCompatActivity() {
 
     private val rows by lazy {
         listOf(binding.row0, binding.row1, binding.row2, binding.row3,
-            binding.row4, binding.row5, binding.row6, binding.row7)
+            binding.row4, binding.row5, binding.row6, binding.row7,
+            binding.row8, binding.row9, binding.row10, binding.row11)
     }
 
     private fun render() {
@@ -155,6 +177,8 @@ class MainActivity : AppCompatActivity() {
         val dwellDlySec = (svc?.dwellDelay ?: 1000L) / 1000f
         val dwellRad = svc?.dwellRadius?.toInt() ?: 30
         val shakeOn = svc?.shakeBackEnabled == true
+        val awakeOn = svc?.awakeEnabled == true
+        val awakeCursorOn = svc?.awakeAutoCursor == true
         val editing = depth == 2
 
         fun marker(idx: Int): String = when {
@@ -171,6 +195,12 @@ class MainActivity : AppCompatActivity() {
         binding.tvLabel5.text = "${marker(5)} Cooldown";        binding.tvValue5.text = "${dwellDlySec}s"
         binding.tvLabel6.text = "${marker(6)} Range";           binding.tvValue6.text = "${dwellRad}px"
         binding.tvLabel7.text = "${marker(7)} Shake Back";      binding.tvValue7.text = if (shakeOn) "ON" else "OFF"
+        binding.tvLabel8.text = "${marker(8)} Awake";           binding.tvValue8.text = if (awakeOn) "ON" else "OFF"
+        binding.tvLabel9.text = "${marker(9)}   Auto Cursor";   binding.tvValue9.text = if (awakeCursorOn) "ON" else "OFF"
+        val autoFocusOn = svc?.autoFocusEnabled == true
+        binding.tvLabel10.text = "${marker(10)}   Auto Focus";   binding.tvValue10.text = if (autoFocusOn) "ON" else "OFF"
+        val favCount = FavoriteAppsManager.getFavorites(this).size
+        binding.tvLabel11.text = "${marker(11)}   Favorites";    binding.tvValue11.text = "${favCount} apps"
 
         val bright = getColor(R.color.hud_green_bright)
         val normal = getColor(R.color.hud_green)
@@ -193,10 +223,17 @@ class MainActivity : AppCompatActivity() {
         binding.tvLabel5.setTextColor(rowColor(5)); binding.tvValue5.setTextColor(rowColor(5))
         binding.tvLabel6.setTextColor(rowColor(6)); binding.tvValue6.setTextColor(rowColor(6))
         binding.tvLabel7.setTextColor(rowColor(7)); binding.tvValue7.setTextColor(rowColor(7))
+        binding.tvLabel8.setTextColor(rowColor(8)); binding.tvValue8.setTextColor(rowColor(8))
+        binding.tvLabel9.setTextColor(rowColor(9)); binding.tvValue9.setTextColor(rowColor(9))
+        binding.tvLabel10.setTextColor(rowColor(10)); binding.tvValue10.setTextColor(rowColor(10))
+        binding.tvLabel11.setTextColor(rowColor(11)); binding.tvValue11.setTextColor(rowColor(11))
 
-        // Row background highlight
+        // Row background highlight + scroll into view
         for ((i, row) in rows.withIndex()) {
             row.setBackgroundColor(if (i == selectedIdx) highlight else 0)
+            if (i == selectedIdx) {
+                row.post { row.parent?.requestChildFocus(row, row) }
+            }
         }
 
         binding.tvHint.text = if (editing) {

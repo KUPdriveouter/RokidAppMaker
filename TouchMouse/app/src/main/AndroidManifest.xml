@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
@@ -23,6 +24,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".apps.AppDrawerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.GazeMou"
+            android:launchMode="singleTask" />
+
+        <activity
+            android:name=".apps.AppPickerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.GazeMou"
+            android:launchMode="singleTask" />
 
         <service
             android:name=".service.TouchMouseService"
