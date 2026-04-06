@@ -12,6 +12,9 @@ import kotlin.math.abs
  * Tracks head rotation via Gyroscope directly.
  * No gimbal lock — gyro gives angular velocity in rad/s, we integrate per frame.
  * EMA low-pass filter to suppress jitter.
+ *
+ * Uses accelerometer to detect body motion (walking, vehicle) and adaptively
+ * increases dead zone / reduces sensitivity to suppress false inputs.
  */
 class HeadTracker(context: Context) : SensorEventListener {
 
@@ -24,6 +27,14 @@ class HeadTracker(context: Context) : SensorEventListener {
 
         // Dead zone in rad/s — ignore sensor noise below this
         private const val DEAD_ZONE = 0.015f
+
+        // ── Motion detection (accelerometer) ──
+        // Gravity magnitude ~9.8; we track variance of accel magnitude around gravity.
+        private const val ACCEL_SMOOTHING = 0.15f          // EMA alpha for accel variance
+        private const val MOTION_THRESHOLD_LOW = 0.4f      // below = stationary
+        private const val MOTION_THRESHOLD_HIGH = 1.2f     // above = strong motion (vehicle)
+        private const val MOTION_DEAD_ZONE_MAX = 0.12f     // max dead zone when in motion
+        private const val MOTION_SENSITIVITY_SCALE = 0.35f // min sensitivity multiplier
     }
 
     interface Listener {
@@ -41,6 +52,7 @@ class HeadTracker(context: Context) : SensorEventListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val gyroscope: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+    private val accelerometer: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
     var listener: Listener? = null
     var sensitivityX = 150f
@@ -53,29 +65,31 @@ class HeadTracker(context: Context) : SensorEventListener {
     private var smoothX = 0f  // yaw (left/right)
     private var smoothY = 0f  // pitch (up/down)
 
+    // ── Motion detection state ──
+    private var accelVariance = 0f      // smoothed variance of accel magnitude
+    private var motionFactor = 0f       // 0 = stationary, 1 = max motion
+
     fun start(): Boolean {
         if (gyroscope == null) {
             DebugLog.e(TAG, "Gyroscope not available")
             return false
         }
-        lastTimestamp = 0L
-        smoothX = 0f
-        smoothY = 0f
+        resetState()
         isTracking = true
         sensorManager.registerListener(this, gyroscope, SENSOR_RATE)
-        DebugLog.i(TAG, "Head tracking started (gyro)")
+        accelerometer?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+        DebugLog.i(TAG, "Head tracking started (gyro + accel)")
         return true
     }
 
     /** Low-frequency mode for background gesture detection (circle toggle). */
     fun startPassive(): Boolean {
         if (gyroscope == null) return false
-        lastTimestamp = 0L
-        smoothX = 0f
-        smoothY = 0f
+        resetState()
         isTracking = true
         sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_UI)
-        DebugLog.i(TAG, "Head tracking started (passive)")
+        accelerometer?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+        DebugLog.i(TAG, "Head tracking started (passive + accel)")
         return true
     }
 
@@ -90,10 +104,44 @@ class HeadTracker(context: Context) : SensorEventListener {
         smoothY = 0f
     }
 
+    private fun resetState() {
+        lastTimestamp = 0L
+        smoothX = 0f
+        smoothY = 0f
+        accelVariance = 0f
+        motionFactor = 0f
+    }
+
     override fun onSensorChanged(event: SensorEvent) {
         if (!isTracking) return
-        if (event.sensor.type != Sensor.TYPE_GYROSCOPE) return
 
+        when (event.sensor.type) {
+            Sensor.TYPE_ACCELEROMETER -> processAccelerometer(event)
+            Sensor.TYPE_GYROSCOPE -> processGyroscope(event)
+        }
+    }
+
+    private fun processAccelerometer(event: SensorEvent) {
+        val ax = event.values[0]
+        val ay = event.values[1]
+        val az = event.values[2]
+        // Magnitude of acceleration; stationary ≈ 9.8
+        val mag = Math.sqrt((ax * ax + ay * ay + az * az).toDouble()).toFloat()
+        // Deviation from gravity = how much the device is being shaken/bounced
+        val deviation = abs(mag - 9.81f)
+
+        // EMA smooth the deviation to get a stable motion estimate
+        accelVariance = accelVariance + ACCEL_SMOOTHING * (deviation - accelVariance)
+
+        // Map variance to 0..1 motion factor
+        motionFactor = when {
+            accelVariance <= MOTION_THRESHOLD_LOW -> 0f
+            accelVariance >= MOTION_THRESHOLD_HIGH -> 1f
+            else -> (accelVariance - MOTION_THRESHOLD_LOW) / (MOTION_THRESHOLD_HIGH - MOTION_THRESHOLD_LOW)
+        }
+    }
+
+    private fun processGyroscope(event: SensorEvent) {
         val timestamp = event.timestamp
         if (lastTimestamp == 0L) {
             lastTimestamp = timestamp
@@ -116,16 +164,23 @@ class HeadTracker(context: Context) : SensorEventListener {
         smoothX = smoothX + SMOOTHING * (gyroYaw - smoothX)
         smoothY = smoothY + SMOOTHING * (gyroPitch - smoothY)
 
+        // Adaptive dead zone: increases with body motion
+        val adaptiveDeadZone = DEAD_ZONE + (MOTION_DEAD_ZONE_MAX - DEAD_ZONE) * motionFactor
+
         // Dead zone — combined magnitude
         val mag = Math.sqrt((smoothX * smoothX + smoothY * smoothY).toDouble()).toFloat()
-        if (mag < DEAD_ZONE) return
+        if (mag < adaptiveDeadZone) return
+
+        // Adaptive sensitivity: reduces with body motion
+        val sensScale = 1f - (1f - MOTION_SENSITIVITY_SCALE) * motionFactor
+        val effSensX = sensitivityX * sensScale
+        val effSensY = sensitivityY * sensScale
 
         // Convert angular velocity to pixel displacement
-        // angular_velocity (rad/s) * dt (s) * sensitivity (px/rad) = pixels
-        val dx = -smoothX * dt * sensitivityX
-        val dy = -smoothY * dt * sensitivityY
+        val dx = -smoothX * dt * effSensX
+        val dy = -smoothY * dt * effSensY
 
-        // Always report raw gyro for gesture detection (even in dead zone)
+        // Always report raw gyro for gesture detection
         listener?.onRawYaw(smoothX)
         listener?.onRawPitch(smoothY)
         listener?.onRawGyro(smoothX, smoothY)

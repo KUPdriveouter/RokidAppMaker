@@ -10,6 +10,7 @@ import android.content.SharedPreferences
 import android.graphics.Path
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import com.kupstudio.touchmouse.util.DebugLog
@@ -170,11 +171,26 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private val inputBuffer = mutableListOf<Int>()
     private var lastInputTime = 0L
 
+    // ── Screen state ──
+
+    private var screenOff = false
+    private var wasActiveBeforeScreenOff = false
+    private var wasPassiveBeforeScreenOff = false
+
     // ── Toggle receiver ──
 
     private val toggleReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == ACTION_TOGGLE) toggleActive()
+        }
+    }
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_SCREEN_OFF -> onScreenOff()
+                Intent.ACTION_SCREEN_ON -> onScreenOn()
+            }
         }
     }
 
@@ -201,6 +217,10 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         shakeBackEnabled = prefs.getBoolean(PREF_SHAKE_BACK_ENABLED, false)
         circleToggleEnabled = prefs.getBoolean(PREF_CIRCLE_TOGGLE_ENABLED, false)
         registerReceiver(toggleReceiver, IntentFilter(ACTION_TOGGLE), RECEIVER_NOT_EXPORTED)
+        registerReceiver(screenReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+        })
         DebugLog.i(TAG, "Service created")
     }
 
@@ -231,6 +251,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             helpOverlay.hide()
         }
         try { unregisterReceiver(toggleReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
         instance = null
         DebugLog.i(TAG, "Service destroyed")
     }
@@ -689,14 +710,23 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             val shape = computeCircleShape()
             DebugLog.d(TAG, "Circle candidate: span=${span.toInt()}px, w=${shape.width.toInt()}, h=${shape.height.toInt()}, aspect=${"%.1f".format(shape.aspect)}")
             if (span >= CIRCLE_MIN_SPAN && shape.width >= CIRCLE_MIN_WIDTH && shape.height >= CIRCLE_MIN_HEIGHT && shape.aspect <= CIRCLE_MAX_ASPECT) {
-                DebugLog.i(TAG, "Circle detected → TOGGLE")
-                resetCircleDetector()
-                circleCooldownUntil = now + CIRCLE_COOLDOWN_MS
-                toggleActive()
-                return
+                // Check that the end point is at the bottom of the circle
+                val centroidY = circlePoints.map { it.y }.average().toFloat()
+                val endY = circlePoints.last().y
+                if (endY < centroidY) {
+                    // End point is above center — wait until it comes back down
+                    DebugLog.d(TAG, "Circle shape OK but end not at bottom (endY=${endY.toInt()}, centY=${centroidY.toInt()}) — waiting")
+                } else {
+                    DebugLog.i(TAG, "Circle detected (end at bottom) → TOGGLE")
+                    resetCircleDetector()
+                    circleCooldownUntil = now + CIRCLE_COOLDOWN_MS
+                    toggleActive()
+                    return
+                }
+            } else {
+                circleAccAngle = 0f
+                circlePoints.clear()
             }
-            circleAccAngle = 0f
-            circlePoints.clear()
         }
     }
 
@@ -794,6 +824,33 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             override fun onCancelled(gestureDescription: GestureDescription) { DebugLog.w(TAG, "Click cancelled") }
         }, null)
         cursorOverlay.flashClick()
+    }
+
+    // ══════════════════════════════════════════
+    //  Screen on/off — pause sensors when display off
+    // ══════════════════════════════════════════
+
+    private fun onScreenOff() {
+        if (screenOff) return
+        screenOff = true
+        wasActiveBeforeScreenOff = isActive
+        wasPassiveBeforeScreenOff = !isActive && circleToggleEnabled
+        headTracker.stop()
+        dwellHandler.removeCallbacks(dwellTickRunnable)
+        DebugLog.i(TAG, "Screen OFF — sensors paused (wasActive=$wasActiveBeforeScreenOff, wasPassive=$wasPassiveBeforeScreenOff)")
+    }
+
+    private fun onScreenOn() {
+        if (!screenOff) return
+        screenOff = false
+        if (wasActiveBeforeScreenOff) {
+            headTracker.start()
+            startDwellTicker()
+            DebugLog.i(TAG, "Screen ON — sensors resumed (active)")
+        } else if (wasPassiveBeforeScreenOff) {
+            headTracker.startPassive()
+            DebugLog.i(TAG, "Screen ON — sensors resumed (passive)")
+        }
     }
 
     // ══════════════════════════════════════════
