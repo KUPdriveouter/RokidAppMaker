@@ -30,7 +30,6 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         const val PREF_DWELL_RADIUS = "dwell_radius"
         const val PREF_DWELL_DELAY = "dwell_delay"
         const val PREF_SHAKE_BACK_ENABLED = "shake_back_enabled"
-        const val PREF_CIRCLE_TOGGLE_ENABLED = "circle_toggle_enabled"
 
         private const val DEFAULT_SENSITIVITY_X = 150f
         private const val DEFAULT_SENSITIVITY_Y = 3500f
@@ -38,7 +37,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         private const val DEFAULT_DWELL_RADIUS = 50f
         private const val DEFAULT_DWELL_DELAY = 1000L
 
-        // Head shake → back
+        // Head shake detection
         private const val SHAKE_THRESHOLD = 1.5f
         private const val SHAKE_WINDOW_MS = 1200L
         private const val SHAKE_2_CROSSINGS = 4
@@ -62,21 +61,15 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         // Konami-style command: L L R R
         private const val COMMAND_TIMEOUT_MS = 2000L
 
-        // Circle gesture → toggle cursor
-        private const val CIRCLE_SAMPLE_MS = 50L
-        private const val CIRCLE_ANGLE_THRESHOLD = 5.5f
-        private const val CIRCLE_MIN_SPAN = 400f
-        private const val CIRCLE_MIN_WIDTH = 120f
-        private const val CIRCLE_MIN_HEIGHT = 120f
-        private const val CIRCLE_MAX_ASPECT = 3.0f
-        private const val CIRCLE_MAX_TIME_MS = 5000L
-        private const val CIRCLE_COOLDOWN_MS = 2000L
+        // Selection mode — casting duration to confirm choice
+        private const val SELECTION_CAST_MS = 1500L
+        private const val SELECTION_DEAD_ZONE = 60f
 
         var instance: TouchMouseService? = null
             private set
     }
 
-    // ── Core ──
+    // -- Core --
 
     private lateinit var headTracker: HeadTracker
     private lateinit var cursorOverlay: CursorOverlayManager
@@ -91,7 +84,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private var isActive = false
     var appInForeground = false
 
-    // ── Dwell ──
+    // -- Dwell --
 
     var dwellEnabled = false
         private set
@@ -116,7 +109,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         }
     }
 
-    // ── Scroll mode ──
+    // -- Scroll mode --
 
     enum class ScrollState { NORMAL, SCROLL_READY, SCROLLING }
     var scrollState = ScrollState.NORMAL
@@ -134,7 +127,24 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private var scrollEverSwiped = false
     private var scrollAnchorTime = 0L
 
-    // ── Head shake → back ──
+    // -- Selection mode --
+
+    var selectionMode = false
+        private set
+    private var selectionVirtualX = 0f
+    private var selectionVirtualY = 0f
+    private var selectionDir = 0          // 0=none, 1=up, 2=down, 3=left, 4=right
+    private var selectionDirStart = 0L    // when current dir was first held
+    private var selectionEnteredAt = 0L   // cooldown: ignore input right after entering
+    private val selectionTickRunnable = object : Runnable {
+        override fun run() {
+            if (!selectionMode) return
+            updateSelectionCast()
+            mainHandler.postDelayed(this, 50)
+        }
+    }
+
+    // -- Head shake --
 
     var shakeBackEnabled = false
         private set
@@ -142,7 +152,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private var shakeLastDirection = 0
     private var shakeCooldownUntil = 0L
 
-    // ── Nod detection ──
+    // -- Nod detection --
 
     private data class NodPeak(val time: Long, val dir: Int)
     private val nodPeaks = mutableListOf<NodPeak>()
@@ -150,18 +160,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private var nodPeakDir = 0
     private var nodCooldownUntil = 0L
 
-    // ── Circle gesture ──
-
-    var circleToggleEnabled = false
-        private set
-    private var circleVirtualX = 240f
-    private var circleVirtualY = 320f
-    private data class CPoint(val x: Float, val y: Float, val time: Long)
-    private val circlePoints = mutableListOf<CPoint>()
-    private var circleAccAngle = 0f
-    private var circleCooldownUntil = 0L
-
-    // ── Konami command: L L R R ──
+    // -- Konami command: L L R R --
 
     private val commandSequence = listOf(
         KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_LEFT,
@@ -170,13 +169,13 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     private val inputBuffer = mutableListOf<Int>()
     private var lastInputTime = 0L
 
-    // ── Screen state ──
+    // -- Screen state --
 
     private var screenOff = false
     private var wasActiveBeforeScreenOff = false
     private var wasPassiveBeforeScreenOff = false
 
-    // ── Toggle receiver ──
+    // -- Receivers --
 
     private val toggleReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -193,9 +192,9 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         }
     }
 
-    // ══════════════════════════════════════════
+    // ==============================
     //  Lifecycle
-    // ══════════════════════════════════════════
+    // ==============================
 
     override fun onCreate() {
         super.onCreate()
@@ -214,7 +213,6 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         dwellRadius = prefs.getFloat(PREF_DWELL_RADIUS, DEFAULT_DWELL_RADIUS)
         dwellDelay = prefs.getLong(PREF_DWELL_DELAY, DEFAULT_DWELL_DELAY)
         shakeBackEnabled = prefs.getBoolean(PREF_SHAKE_BACK_ENABLED, false)
-        circleToggleEnabled = prefs.getBoolean(PREF_CIRCLE_TOGGLE_ENABLED, false)
         registerReceiver(toggleReceiver, IntentFilter(ACTION_TOGGLE), RECEIVER_NOT_EXPORTED)
         registerReceiver(screenReceiver, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -233,12 +231,8 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         cursorX = screenWidth / 2f
         cursorY = screenHeight / 2f
         DebugLog.i(TAG, "Screen: ${screenWidth}x${screenHeight}")
-
-        if (circleToggleEnabled && !isActive) {
-            circleVirtualX = screenWidth / 2f
-            circleVirtualY = screenHeight / 2f
-            headTracker.startPassive()
-        }
+        // Start passive sensor so shake-to-activate works when cursor is off
+        if (!isActive) headTracker.startPassive()
         broadcastStatus()
     }
 
@@ -258,13 +252,12 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() { DebugLog.w(TAG, "Service interrupted") }
 
-    // ══════════════════════════════════════════
+    // ==============================
     //  Public API
-    // ══════════════════════════════════════════
+    // ==============================
 
     fun toggleActive() {
         isActive = !isActive
-        resetCircleDetector()
         if (isActive) {
             cursorX = screenWidth / 2f
             cursorY = screenHeight / 2f
@@ -277,16 +270,14 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         } else {
             headTracker.stop()
             dwellHandler.removeCallbacks(dwellTickRunnable)
+            exitSelectionMode()
             exitScrollMode()
             setDwellMode(false)
             cursorOverlay.setDwellProgress(0f)
             cursorOverlay.hide()
             helpOverlay.hide()
-            if (circleToggleEnabled) {
-                circleVirtualX = screenWidth / 2f
-                circleVirtualY = screenHeight / 2f
-                headTracker.startPassive()
-            }
+            // Resume passive sensor so shake-to-activate works
+            headTracker.startPassive()
             DebugLog.i(TAG, "HEAD MOUSE OFF")
         }
         broadcastStatus()
@@ -330,44 +321,32 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         prefs.edit().putBoolean(PREF_SHAKE_BACK_ENABLED, enabled).apply()
     }
 
-    fun setCircleToggleEnabled(enabled: Boolean) {
-        circleToggleEnabled = enabled
-        prefs.edit().putBoolean(PREF_CIRCLE_TOGGLE_ENABLED, enabled).apply()
-        if (!isActive) {
-            if (enabled) {
-                circleVirtualX = screenWidth / 2f
-                circleVirtualY = screenHeight / 2f
-                resetCircleDetector()
-                headTracker.startPassive()
-            } else {
-                headTracker.stop()
-            }
-        }
-    }
-
-    // ══════════════════════════════════════════
+    // ==============================
     //  Overlay sync
-    // ══════════════════════════════════════════
+    // ==============================
 
     private fun syncOverlay() {
         cursorOverlay.setDwellMode(dwellEnabled)
         cursorOverlay.setScrollMode(scrollState != ScrollState.NORMAL)
+        cursorOverlay.setSelectionMode(selectionMode)
         cursorOverlay.setDwellProgress(0f)
         when {
+            selectionMode ->
+                helpOverlay.show("SELECT MODE", "L:scroll  R:dwell  U:off  D:exit")
             scrollState == ScrollState.SCROLLING ->
-                helpOverlay.show("SCROLLING", "tilt: scroll | stop + dwell: release anchor")
+                helpOverlay.show("SCROLLING", "tilt: scroll | stop + dwell: release | nod x2: exit")
             scrollState == ScrollState.SCROLL_READY ->
-                helpOverlay.show("SCROLL MODE", "move to target | dwell: anchor | nod x2: off")
+                helpOverlay.show("SCROLL MODE", "move to target | dwell: anchor | nod x2: exit")
             dwellEnabled ->
-                helpOverlay.show("DWELL MODE", "nod x2: off")
+                helpOverlay.show("DWELL MODE", "nod x2: exit")
             else ->
                 helpOverlay.hide()
         }
     }
 
-    // ══════════════════════════════════════════
+    // ==============================
     //  Dwell mode
-    // ══════════════════════════════════════════
+    // ==============================
 
     private fun setDwellMode(on: Boolean) {
         dwellEnabled = on
@@ -425,12 +404,12 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             dwellCooldownUntil = now + dwellDelay
             when (scrollState) {
                 ScrollState.SCROLL_READY -> {
-                    DebugLog.i(TAG, "Dwell → anchor at (${cursorX.toInt()}, ${cursorY.toInt()})")
+                    DebugLog.i(TAG, "Dwell -> anchor at (${cursorX.toInt()}, ${cursorY.toInt()})")
                     enterScrolling()
                     mainHandler.postDelayed({ resetDwell() }, dwellDelay)
                 }
                 ScrollState.SCROLLING -> {
-                    DebugLog.i(TAG, "Dwell → exit scroll (anchor released)")
+                    DebugLog.i(TAG, "Dwell -> exit scroll (anchor released)")
                     exitScrollMode()
                 }
                 ScrollState.NORMAL -> {
@@ -442,9 +421,9 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         }
     }
 
-    // ══════════════════════════════════════════
+    // ==============================
     //  Scroll mode
-    // ══════════════════════════════════════════
+    // ==============================
 
     private fun enterScrollReady() {
         dwellWasEnabled = dwellEnabled
@@ -559,7 +538,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         val dist = Math.sqrt(((endX - sx) * (endX - sx) + (endY - sy) * (endY - sy)).toDouble())
         if (dist < 10.0) return
 
-        DebugLog.d(TAG, "Swipe (${sx.toInt()},${sy.toInt()})→(${endX.toInt()},${endY.toInt()}) dist=${dist.toInt()}")
+        DebugLog.d(TAG, "Swipe (${sx.toInt()},${sy.toInt()})->(${endX.toInt()},${endY.toInt()}) dist=${dist.toInt()}")
         val path = Path().apply { moveTo(sx, sy); lineTo(endX, endY) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, SCROLL_GESTURE_MS))
@@ -567,9 +546,107 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         dispatchGesture(gesture, null, null)
     }
 
-    // ══════════════════════════════════════════
+    // ==============================
+    //  Selection mode
+    // ==============================
+
+    private fun enterSelectionMode() {
+        if (selectionMode) return
+        selectionMode = true
+        // Pause dwell while in selection
+        dwellHandler.removeCallbacks(dwellTickRunnable)
+        cursorOverlay.setDwellProgress(0f)
+        // Center cursor (slightly above center for better visibility)
+        cursorX = screenWidth / 2f
+        cursorY = screenHeight * 0.35f
+        cursorOverlay.updatePosition(cursorX, cursorY)
+        // Reset selection state
+        selectionVirtualX = 0f
+        selectionVirtualY = 0f
+        selectionDir = 0
+        selectionDirStart = 0L
+        selectionEnteredAt = System.currentTimeMillis()
+        // Start ticker
+        mainHandler.post(selectionTickRunnable)
+        syncOverlay()
+        DebugLog.i(TAG, "SELECTION MODE — choose: L=scroll R=dwell U=off D=exit")
+    }
+
+    private fun exitSelectionMode() {
+        if (!selectionMode) return
+        selectionMode = false
+        mainHandler.removeCallbacks(selectionTickRunnable)
+        cursorOverlay.setSelectionMode(false)
+        cursorOverlay.setSelectionDir(0, 0f)
+        syncOverlay()
+        // Resume dwell if enabled
+        if (dwellEnabled) startDwellTicker()
+        DebugLog.i(TAG, "Selection mode OFF")
+    }
+
+    private fun updateSelectionCast() {
+        if (!selectionMode) return
+        val now = System.currentTimeMillis()
+
+        // Ignore input for 800ms after entering to let nod motion settle
+        if (now - selectionEnteredAt < 800L) {
+            selectionVirtualX = 0f
+            selectionVirtualY = 0f
+            return
+        }
+
+        val absX = kotlin.math.abs(selectionVirtualX)
+        val absY = kotlin.math.abs(selectionVirtualY)
+
+        // Determine which direction is dominant
+        val newDir = if (maxOf(absX, absY) < SELECTION_DEAD_ZONE) {
+            0 // neutral
+        } else if (absX > absY) {
+            if (selectionVirtualX < 0) 3 else 4 // left or right
+        } else {
+            if (selectionVirtualY < 0) 1 else 2 // up or down
+        }
+
+        if (newDir != selectionDir) {
+            selectionDir = newDir
+            selectionDirStart = if (newDir != 0) now else 0L
+        }
+
+        // Calculate cast progress
+        val progress = if (selectionDir != 0 && selectionDirStart > 0) {
+            ((now - selectionDirStart).toFloat() / SELECTION_CAST_MS).coerceIn(0f, 1f)
+        } else 0f
+
+        cursorOverlay.setSelectionDir(selectionDir, progress)
+
+        // If cast completed, execute the selection
+        if (progress >= 1f) {
+            val dir = selectionDir
+            exitSelectionMode()
+            when (dir) {
+                1 -> { // Up = cursor off
+                    DebugLog.i(TAG, "Selection: UP -> cursor OFF")
+                    toggleActive()
+                }
+                2 -> { // Down = exit selection (back to normal cursor)
+                    DebugLog.i(TAG, "Selection: DOWN -> exit (normal cursor)")
+                    // Already exited above
+                }
+                3 -> { // Left = scroll mode
+                    DebugLog.i(TAG, "Selection: LEFT -> scroll mode")
+                    enterScrollReady()
+                }
+                4 -> { // Right = dwell mode
+                    DebugLog.i(TAG, "Selection: RIGHT -> dwell mode")
+                    setDwellMode(true)
+                }
+            }
+        }
+    }
+
+    // ==============================
     //  Nod detection
-    // ══════════════════════════════════════════
+    // ==============================
 
     override fun onRawPitch(pitch: Float) {
         if (!isActive) return
@@ -592,21 +669,26 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
                 val last4 = nodPeaks.takeLast(4)
                 val alternating = (0 until 3).all { last4[it].dir != last4[it + 1].dir }
                 if (alternating) {
-                    val firstDir = last4[0].dir
                     nodPeaks.clear()
                     nodCooldownUntil = now + NOD_COOLDOWN_MS
-                    DebugLog.i(TAG, "Nod x2 detected, firstDir=$firstDir")
+                    DebugLog.i(TAG, "Nod x2 detected")
 
-                    if (scrollState != ScrollState.NORMAL) {
-                        exitScrollMode()
-                    } else if (firstDir == +1) {
-                        if (dwellEnabled) {
-                            DebugLog.d(TAG, "Scroll blocked — dwell mode active")
-                        } else {
-                            enterScrollReady()
+                    when {
+                        selectionMode -> {
+                            // Nod in selection mode: ignore (use direction casting instead)
                         }
-                    } else {
-                        setDwellMode(!dwellEnabled)
+                        scrollState != ScrollState.NORMAL -> {
+                            // In scroll mode: nod exits to normal
+                            exitScrollMode()
+                        }
+                        dwellEnabled -> {
+                            // In dwell mode: nod exits to normal
+                            setDwellMode(false)
+                        }
+                        else -> {
+                            // Normal mode: nod enters selection mode
+                            enterSelectionMode()
+                        }
                     }
                 }
             }
@@ -614,12 +696,37 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         }
     }
 
-    // ══════════════════════════════════════════
-    //  Head shake → back
-    // ══════════════════════════════════════════
+    // ==============================
+    //  Head shake
+    // ==============================
 
     override fun onRawYaw(yaw: Float) {
-        if (!isActive || !shakeBackEnabled) return
+        // When cursor is OFF: shake turns cursor ON
+        if (!isActive) {
+            val now = System.currentTimeMillis()
+            if (now < shakeCooldownUntil) return
+            val dir = when {
+                yaw > SHAKE_THRESHOLD -> +1
+                yaw < -SHAKE_THRESHOLD -> -1
+                else -> 0
+            }
+            if (dir != 0 && dir != shakeLastDirection) {
+                shakeLastDirection = dir
+                shakeCrossings.add(now)
+                shakeCrossings.removeAll { now - it > SHAKE_WINDOW_MS }
+                if (shakeCrossings.size >= SHAKE_2_CROSSINGS) {
+                    shakeCrossings.clear()
+                    shakeLastDirection = 0
+                    shakeCooldownUntil = now + SHAKE_COOLDOWN_MS
+                    DebugLog.i(TAG, "Shake x2 -> CURSOR ON")
+                    toggleActive()
+                }
+            }
+            return
+        }
+
+        // When cursor is ON: shake = back button (if enabled)
+        if (!shakeBackEnabled) return
         val now = System.currentTimeMillis()
         if (now < shakeCooldownUntil) return
 
@@ -632,28 +739,29 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             shakeLastDirection = dir
             shakeCrossings.add(now)
             shakeCrossings.removeAll { now - it > SHAKE_WINDOW_MS }
-            resetCircleDetector()
             if (shakeCrossings.size >= SHAKE_2_CROSSINGS) {
                 shakeCrossings.clear()
                 shakeLastDirection = 0
                 shakeCooldownUntil = now + SHAKE_COOLDOWN_MS
-                DebugLog.i(TAG, "Shake x2 → BACK")
+                DebugLog.i(TAG, "Shake x2 -> BACK")
                 performGlobalAction(GLOBAL_ACTION_BACK)
             }
         }
     }
 
-    // ══════════════════════════════════════════
+    // ==============================
     //  HeadTracker.Listener — cursor movement
-    // ══════════════════════════════════════════
+    // ==============================
 
     override fun onHeadMove(deltaX: Float, deltaY: Float): HeadTracker.ClampResult {
         if (!isActive) {
-            if (circleToggleEnabled) {
-                circleVirtualX = (circleVirtualX + deltaX).coerceIn(0f, screenWidth - 1f)
-                circleVirtualY = (circleVirtualY + deltaY).coerceIn(0f, screenHeight - 1f)
-                feedCircleDetector(circleVirtualX, circleVirtualY)
-            }
+            return HeadTracker.ClampResult(false, false)
+        }
+
+        // Selection mode: accumulate virtual position (cursor stays centered)
+        if (selectionMode) {
+            selectionVirtualX = (selectionVirtualX + deltaX).coerceIn(-300f, 300f)
+            selectionVirtualY = (selectionVirtualY + deltaY).coerceIn(-300f, 300f)
             return HeadTracker.ClampResult(false, false)
         }
 
@@ -672,103 +780,12 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         cursorY = newY
         cursorOverlay.updatePosition(cursorX, cursorY)
 
-        if (scrollState == ScrollState.NORMAL) feedCircleDetector(cursorX, cursorY)
         return HeadTracker.ClampResult(clampedX, clampedY)
     }
 
-    // ══════════════════════════════════════════
-    //  Circle gesture detection
-    // ══════════════════════════════════════════
-
-    private fun feedCircleDetector(x: Float, y: Float) {
-        val now = System.currentTimeMillis()
-        if (now < circleCooldownUntil) return
-        if (circlePoints.isNotEmpty() && now - circlePoints.last().time < CIRCLE_SAMPLE_MS) return
-
-        circlePoints.add(CPoint(x, y, now))
-
-        if (circlePoints.size > 1 && now - circlePoints.first().time > CIRCLE_MAX_TIME_MS) {
-            circlePoints.removeAt(0)
-            if (circlePoints.size < 3) circleAccAngle = 0f
-        }
-        if (circlePoints.size < 3) return
-
-        val p0 = circlePoints[circlePoints.size - 3]
-        val p1 = circlePoints[circlePoints.size - 2]
-        val p2 = circlePoints[circlePoints.size - 1]
-        val v1x = p1.x - p0.x; val v1y = p1.y - p0.y
-        val v2x = p2.x - p1.x; val v2y = p2.y - p1.y
-        val len1 = Math.sqrt((v1x * v1x + v1y * v1y).toDouble()).toFloat()
-        val len2 = Math.sqrt((v2x * v2x + v2y * v2y).toDouble()).toFloat()
-        if (len1 < 2f || len2 < 2f) return
-
-        circleAccAngle += Math.atan2((v1x * v2y - v1y * v2x).toDouble(), (v1x * v2x + v1y * v2y).toDouble()).toFloat()
-
-        if (kotlin.math.abs(circleAccAngle) >= CIRCLE_ANGLE_THRESHOLD) {
-            val span = computeCircleSpan()
-            val shape = computeCircleShape()
-            DebugLog.d(TAG, "Circle candidate: span=${span.toInt()}px, w=${shape.width.toInt()}, h=${shape.height.toInt()}, aspect=${"%.1f".format(shape.aspect)}")
-            if (span >= CIRCLE_MIN_SPAN && shape.width >= CIRCLE_MIN_WIDTH && shape.height >= CIRCLE_MIN_HEIGHT && shape.aspect <= CIRCLE_MAX_ASPECT) {
-                // Check that the end point is in the lower portion of the circle
-                val minY = circlePoints.minOf { it.y }
-                val maxY = circlePoints.maxOf { it.y }
-                val bottomThreshold = minY + (maxY - minY) * 0.6f
-                val endY = circlePoints.last().y
-                if (endY < bottomThreshold) {
-                    // End point is too high — wait until it comes down
-                    DebugLog.d(TAG, "Circle shape OK but end not at bottom (endY=${endY.toInt()}, thresh=${bottomThreshold.toInt()}) — waiting")
-                } else {
-                    DebugLog.i(TAG, "Circle detected (end at bottom) → TOGGLE")
-                    resetCircleDetector()
-                    circleCooldownUntil = now + CIRCLE_COOLDOWN_MS
-                    toggleActive()
-                    return
-                }
-            } else {
-                circleAccAngle = 0f
-                circlePoints.clear()
-            }
-        }
-    }
-
-    private fun computeCircleSpan(): Float {
-        if (circlePoints.size < 2) return 0f
-        var maxDistSq = 0f
-        val step = maxOf(1, circlePoints.size / 12)
-        for (i in circlePoints.indices step step) {
-            for (j in i + step until circlePoints.size step step) {
-                val dx = circlePoints[i].x - circlePoints[j].x
-                val dy = circlePoints[i].y - circlePoints[j].y
-                val dSq = dx * dx + dy * dy
-                if (dSq > maxDistSq) maxDistSq = dSq
-            }
-        }
-        return Math.sqrt(maxDistSq.toDouble()).toFloat()
-    }
-
-    private data class CircleShape(val width: Float, val height: Float, val aspect: Float)
-
-    private fun computeCircleShape(): CircleShape {
-        if (circlePoints.size < 2) return CircleShape(0f, 0f, Float.MAX_VALUE)
-        var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
-        var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
-        for (p in circlePoints) {
-            if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x
-            if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y
-        }
-        val w = maxX - minX; val h = maxY - minY
-        val aspect = if (w < 1f || h < 1f) Float.MAX_VALUE else maxOf(w / h, h / w)
-        return CircleShape(w, h, aspect)
-    }
-
-    private fun resetCircleDetector() {
-        circlePoints.clear()
-        circleAccAngle = 0f
-    }
-
-    // ══════════════════════════════════════════
+    // ==============================
     //  Key event handling
-    // ══════════════════════════════════════════
+    // ==============================
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (appInForeground) return false
@@ -785,7 +802,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         val now = System.currentTimeMillis()
         val keyCode = event.keyCode
 
-        // Konami command: L L R R → toggle
+        // Konami command: L L R R -> toggle
         if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
             if (now - lastInputTime > COMMAND_TIMEOUT_MS) inputBuffer.clear()
             lastInputTime = now
@@ -810,9 +827,9 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         return false
     }
 
-    // ══════════════════════════════════════════
+    // ==============================
     //  Click
-    // ══════════════════════════════════════════
+    // ==============================
 
     private fun performClick() {
         DebugLog.d(TAG, "Click at (${cursorX.toInt()}, ${cursorY.toInt()})")
@@ -827,18 +844,19 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         cursorOverlay.flashClick()
     }
 
-    // ══════════════════════════════════════════
+    // ==============================
     //  Screen on/off — pause sensors when display off
-    // ══════════════════════════════════════════
+    // ==============================
 
     private fun onScreenOff() {
         if (screenOff) return
         screenOff = true
         wasActiveBeforeScreenOff = isActive
-        wasPassiveBeforeScreenOff = !isActive && circleToggleEnabled
+        wasPassiveBeforeScreenOff = !isActive
         headTracker.stop()
         dwellHandler.removeCallbacks(dwellTickRunnable)
-        DebugLog.i(TAG, "Screen OFF — sensors paused (wasActive=$wasActiveBeforeScreenOff, wasPassive=$wasPassiveBeforeScreenOff)")
+        mainHandler.removeCallbacks(selectionTickRunnable)
+        DebugLog.i(TAG, "Screen OFF — sensors paused (wasActive=$wasActiveBeforeScreenOff)")
     }
 
     private fun onScreenOn() {
@@ -846,7 +864,8 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         screenOff = false
         if (wasActiveBeforeScreenOff) {
             headTracker.start()
-            startDwellTicker()
+            if (selectionMode) mainHandler.post(selectionTickRunnable)
+            else if (dwellEnabled || scrollState != ScrollState.NORMAL) startDwellTicker()
             DebugLog.i(TAG, "Screen ON — sensors resumed (active)")
         } else if (wasPassiveBeforeScreenOff) {
             headTracker.startPassive()
@@ -854,9 +873,9 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
         }
     }
 
-    // ══════════════════════════════════════════
+    // ==============================
     //  Broadcast
-    // ══════════════════════════════════════════
+    // ==============================
 
     private fun broadcastStatus() {
         val intent = Intent(ACTION_STATUS_CHANGED).apply {

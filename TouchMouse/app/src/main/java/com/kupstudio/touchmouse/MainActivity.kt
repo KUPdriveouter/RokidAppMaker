@@ -16,7 +16,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
 
     private var depth = 1  // 1: navigate, 2: edit
-    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DW_TIME, DW_DLY, DW_RAD, SHAKE, CIRCLE }
+    private enum class Item { SERVICE, TOGGLE, SENS_X, SENS_Y, DW_TIME, DW_DLY, DW_RAD, SHAKE }
     private val items = Item.entries.toList()
     private var selectedIdx = 0
     private var wasActiveBeforeEdit = false
@@ -92,10 +92,6 @@ class MainActivity : AppCompatActivity() {
                 TouchMouseService.instance?.let { it.setShakeBackEnabled(!it.shakeBackEnabled) }
                 render()
             }
-            Item.CIRCLE -> {
-                TouchMouseService.instance?.let { it.setCircleToggleEnabled(!it.circleToggleEnabled) }
-                render()
-            }
             else -> enterEdit()
         }
     }
@@ -138,7 +134,6 @@ class MainActivity : AppCompatActivity() {
             Item.DW_DLY -> TouchMouseService.instance?.let { it.updateDwellDelay(it.dwellDelay + dir * 250L) }
             Item.DW_RAD -> TouchMouseService.instance?.let { it.updateDwellRadius(it.dwellRadius + dir * 5f) }
             Item.SHAKE -> TouchMouseService.instance?.let { it.setShakeBackEnabled(!it.shakeBackEnabled) }
-            Item.CIRCLE -> TouchMouseService.instance?.let { it.setCircleToggleEnabled(!it.circleToggleEnabled) }
         }
     }
 
@@ -146,7 +141,7 @@ class MainActivity : AppCompatActivity() {
 
     private val rows by lazy {
         listOf(binding.row0, binding.row1, binding.row2, binding.row3,
-            binding.row4, binding.row5, binding.row6, binding.row7, binding.row8)
+            binding.row4, binding.row5, binding.row6, binding.row7)
     }
 
     private fun render() {
@@ -160,7 +155,6 @@ class MainActivity : AppCompatActivity() {
         val dwellDlySec = (svc?.dwellDelay ?: 1000L) / 1000f
         val dwellRad = svc?.dwellRadius?.toInt() ?: 30
         val shakeOn = svc?.shakeBackEnabled == true
-        val circleOn = svc?.circleToggleEnabled == true
         val editing = depth == 2
 
         fun marker(idx: Int): String = when {
@@ -177,7 +171,6 @@ class MainActivity : AppCompatActivity() {
         binding.tvLabel5.text = "${marker(5)} Cooldown";        binding.tvValue5.text = "${dwellDlySec}s"
         binding.tvLabel6.text = "${marker(6)} Range";           binding.tvValue6.text = "${dwellRad}px"
         binding.tvLabel7.text = "${marker(7)} Shake Back";      binding.tvValue7.text = if (shakeOn) "ON" else "OFF"
-        binding.tvLabel8.text = "${marker(8)} Circle Toggle";   binding.tvValue8.text = if (circleOn) "ON" else "OFF"
 
         val bright = getColor(R.color.hud_green_bright)
         val normal = getColor(R.color.hud_green)
@@ -200,7 +193,6 @@ class MainActivity : AppCompatActivity() {
         binding.tvLabel5.setTextColor(rowColor(5)); binding.tvValue5.setTextColor(rowColor(5))
         binding.tvLabel6.setTextColor(rowColor(6)); binding.tvValue6.setTextColor(rowColor(6))
         binding.tvLabel7.setTextColor(rowColor(7)); binding.tvValue7.setTextColor(rowColor(7))
-        binding.tvLabel8.setTextColor(rowColor(8)); binding.tvValue8.setTextColor(rowColor(8))
 
         // Row background highlight
         for ((i, row) in rows.withIndex()) {
@@ -210,7 +202,7 @@ class MainActivity : AppCompatActivity() {
         binding.tvHint.text = if (editing) {
             "< Swipe >  Adjust value\n[ Tap / Back ]  Confirm"
         } else {
-            "< Swipe >  Navigate    [ Tap ]  Select\n\nNod Down x2  Scroll mode\nNod Up x2  Dwell mode\nL L R R  Toggle cursor"
+            "< Swipe >  Navigate    [ Tap ]  Select\n\nNod x2  Mode select\nShake x2  Cursor on\nL L R R  Toggle cursor"
         }
         binding.tvDepth.text = if (editing) "[EDIT]" else ""
     }

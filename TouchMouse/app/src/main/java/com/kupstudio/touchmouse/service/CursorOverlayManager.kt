@@ -14,13 +14,13 @@ import android.view.WindowManager
 
 /**
  * Simple cursor overlay — small green crosshair dot.
- * Position updated directly from HeadTracker on sensor thread → minimal latency.
+ * Position updated directly from HeadTracker on sensor thread -> minimal latency.
  */
 class CursorOverlayManager(private val context: Context) {
 
     companion object {
-        // Larger to fit dwell ring outside the cursor
-        private const val CURSOR_SIZE = 40
+        // Larger to fit dwell ring + selection labels
+        private const val CURSOR_SIZE = 160
     }
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -77,7 +77,7 @@ class CursorOverlayManager(private val context: Context) {
         } catch (_: Exception) {}
     }
 
-    /** Set dwell progress 0.0–1.0 (arc fill around cursor) */
+    /** Set dwell progress 0.0-1.0 (arc fill around cursor) */
     fun setDwellProgress(progress: Float) {
         cursorView?.setDwellProgress(progress)
     }
@@ -98,6 +98,16 @@ class CursorOverlayManager(private val context: Context) {
         cursorView?.setScrollDir(dx, dy)
     }
 
+    /** Show/hide selection mode overlay */
+    fun setSelectionMode(active: Boolean) {
+        cursorView?.setSelectionMode(active)
+    }
+
+    /** Set selection direction (0=none, 1=up, 2=down, 3=left, 4=right) + cast progress 0-1 */
+    fun setSelectionDir(dir: Int, progress: Float) {
+        cursorView?.setSelectionDir(dir, progress)
+    }
+
     fun flashClick() {
         mainHandler.post {
             cursorView?.let { view ->
@@ -115,12 +125,18 @@ class CursorOverlayManager(private val context: Context) {
         private var scrollMode = false
         private var scrollDirX = 0f
         private var scrollDirY = 0f
+        private var inSelectionMode = false
+        private var selDir = 0
+        private var selProgress = 0f
 
         // Inner cursor radius
         private val innerR = 8f
         // Dwell ring radius (outer)
         private val dwellR = 17f
         private val dwellStroke = 4f
+
+        // Selection mode layout
+        private val selRadius = 55f      // distance from center to label
 
         // Black outlines for contrast on any background
         private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -173,6 +189,38 @@ class CursorOverlayManager(private val context: Context) {
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }
+        // Selection mode paints
+        private val selLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.GREEN
+            textSize = 16f
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.MONOSPACE
+        }
+        private val selLabelDimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(120, 0, 255, 0)
+            textSize = 14f
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.MONOSPACE
+        }
+        private val selLabelBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            textSize = 16f
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.MONOSPACE
+            strokeWidth = 4f
+            style = Paint.Style.STROKE
+        }
+        private val selArcBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(100, 0, 0, 0)
+            strokeWidth = 3f
+            style = Paint.Style.STROKE
+        }
+        private val selArcFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.GREEN
+            strokeWidth = 3f
+            style = Paint.Style.STROKE
+        }
+
         private val arcRect = RectF()
 
         fun setFlash(on: Boolean) {
@@ -202,9 +250,32 @@ class CursorOverlayManager(private val context: Context) {
             postInvalidate()
         }
 
+        fun setSelectionMode(active: Boolean) {
+            inSelectionMode = active
+            if (!active) { selDir = 0; selProgress = 0f }
+            postInvalidate()
+        }
+
+        fun setSelectionDir(dir: Int, progress: Float) {
+            selDir = dir
+            selProgress = progress.coerceIn(0f, 1f)
+            postInvalidate()
+        }
+
         override fun onDraw(canvas: Canvas) {
             val cx = width / 2f
             val cy = height / 2f
+
+            // Selection mode: draw 4-direction labels with casting progress
+            if (inSelectionMode) {
+                drawSelectionOverlay(canvas, cx, cy)
+                // Still draw the center cursor dot
+                canvas.drawCircle(cx, cy, innerR, outlinePaint)
+                canvas.drawCircle(cx, cy, innerR, ringPaint)
+                canvas.drawCircle(cx, cy, 3.5f, dotOutlinePaint)
+                canvas.drawCircle(cx, cy, 2.5f, dotPaint)
+                return
+            }
 
             // Flash fill
             if (flashing) {
@@ -267,7 +338,65 @@ class CursorOverlayManager(private val context: Context) {
                 // Right
                 drawArrow(cx + offset + aH, cy, cx + offset, cy - aW, cx + offset, cy + aW, scrollDirX > 0)
             }
+        }
 
+        private fun drawSelectionOverlay(canvas: Canvas, cx: Float, cy: Float) {
+            // Dark semi-transparent background circle for readability
+            val bgCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(240, 0, 0, 0)
+                style = Paint.Style.FILL
+            }
+            canvas.drawCircle(cx, cy, selRadius + 22f, bgCirclePaint)
+
+            // Outer ring
+            val ringPaintSel = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(80, 0, 255, 0)
+                strokeWidth = 1.5f
+                style = Paint.Style.STROKE
+            }
+            canvas.drawCircle(cx, cy, selRadius + 22f, ringPaintSel)
+
+            // Labels for 4 directions: 1=up(OFF), 2=down(EXIT), 3=left(SCROLL), 4=right(DWELL)
+            data class DirInfo(val dir: Int, val label: String, val lx: Float, val ly: Float)
+
+            val dirs = listOf(
+                DirInfo(1, "OFF",    cx,              cy - selRadius + 2f),
+                DirInfo(2, "EXIT",   cx,              cy + selRadius + 8f),
+                DirInfo(3, "SCR",    cx - selRadius,   cy + 6f),
+                DirInfo(4, "DWL",    cx + selRadius,   cy + 6f)
+            )
+
+            for (d in dirs) {
+                val active = selDir == d.dir
+                val paint = if (active) selLabelPaint else selLabelDimPaint
+                val bgPaint = selLabelBgPaint.apply {
+                    textSize = paint.textSize
+                }
+                // Text outline for readability
+                canvas.drawText(d.label, d.lx, d.ly, bgPaint)
+                canvas.drawText(d.label, d.lx, d.ly, paint)
+
+                // If this direction is active, draw casting progress arc around label
+                if (active && selProgress > 0f) {
+                    val arcR = 20f
+                    arcRect.set(d.lx - arcR, d.ly - arcR - 6f, d.lx + arcR, d.ly + arcR - 6f)
+                    canvas.drawArc(arcRect, -90f, 360f, false, selArcBgPaint)
+                    canvas.drawArc(arcRect, -90f, 360f * selProgress, false, selArcFillPaint)
+                }
+            }
+
+            // Cross-hair lines from center toward each direction
+            val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(50, 0, 255, 0)
+                strokeWidth = 1f
+                style = Paint.Style.STROKE
+            }
+            val lineInner = 14f
+            val lineOuter = 30f
+            canvas.drawLine(cx, cy - lineInner, cx, cy - lineOuter, linePaint)
+            canvas.drawLine(cx, cy + lineInner, cx, cy + lineOuter, linePaint)
+            canvas.drawLine(cx - lineInner, cy, cx - lineOuter, cy, linePaint)
+            canvas.drawLine(cx + lineInner, cy, cx + lineOuter, cy, linePaint)
         }
     }
 }

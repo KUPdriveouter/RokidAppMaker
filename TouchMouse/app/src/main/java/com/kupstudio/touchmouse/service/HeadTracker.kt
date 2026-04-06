@@ -82,7 +82,7 @@ class HeadTracker(context: Context) : SensorEventListener {
         return true
     }
 
-    /** Low-frequency mode for background gesture detection (circle toggle). */
+    /** Low-frequency mode for background gesture detection (shake to activate). */
     fun startPassive(): Boolean {
         if (gyroscope == null) return false
         resetState()
