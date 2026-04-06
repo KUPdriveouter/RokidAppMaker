@@ -30,11 +30,11 @@ class HeadTracker(context: Context) : SensorEventListener {
 
         // ── Motion detection (accelerometer) ──
         // Gravity magnitude ~9.8; we track variance of accel magnitude around gravity.
-        private const val ACCEL_SMOOTHING = 0.15f          // EMA alpha for accel variance
-        private const val MOTION_THRESHOLD_LOW = 0.4f      // below = stationary
-        private const val MOTION_THRESHOLD_HIGH = 1.2f     // above = strong motion (vehicle)
-        private const val MOTION_DEAD_ZONE_MAX = 0.12f     // max dead zone when in motion
-        private const val MOTION_SENSITIVITY_SCALE = 0.35f // min sensitivity multiplier
+        private const val ACCEL_SMOOTHING = 0.1f            // EMA alpha for accel variance
+        private const val MOTION_THRESHOLD_LOW = 1.5f      // below = stationary
+        private const val MOTION_THRESHOLD_HIGH = 3.5f     // above = strong motion (vehicle)
+        private const val MOTION_DEAD_ZONE_MAX = 0.08f     // max dead zone when in motion
+        private const val MOTION_SENSITIVITY_SCALE = 0.5f  // min sensitivity multiplier
     }
 
     interface Listener {

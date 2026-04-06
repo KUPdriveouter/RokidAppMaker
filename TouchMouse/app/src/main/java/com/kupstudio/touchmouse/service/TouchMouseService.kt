@@ -10,7 +10,6 @@ import android.content.SharedPreferences
 import android.graphics.Path
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import com.kupstudio.touchmouse.util.DebugLog
@@ -710,12 +709,14 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
             val shape = computeCircleShape()
             DebugLog.d(TAG, "Circle candidate: span=${span.toInt()}px, w=${shape.width.toInt()}, h=${shape.height.toInt()}, aspect=${"%.1f".format(shape.aspect)}")
             if (span >= CIRCLE_MIN_SPAN && shape.width >= CIRCLE_MIN_WIDTH && shape.height >= CIRCLE_MIN_HEIGHT && shape.aspect <= CIRCLE_MAX_ASPECT) {
-                // Check that the end point is at the bottom of the circle
-                val centroidY = circlePoints.map { it.y }.average().toFloat()
+                // Check that the end point is in the lower portion of the circle
+                val minY = circlePoints.minOf { it.y }
+                val maxY = circlePoints.maxOf { it.y }
+                val bottomThreshold = minY + (maxY - minY) * 0.6f
                 val endY = circlePoints.last().y
-                if (endY < centroidY) {
-                    // End point is above center — wait until it comes back down
-                    DebugLog.d(TAG, "Circle shape OK but end not at bottom (endY=${endY.toInt()}, centY=${centroidY.toInt()}) — waiting")
+                if (endY < bottomThreshold) {
+                    // End point is too high — wait until it comes down
+                    DebugLog.d(TAG, "Circle shape OK but end not at bottom (endY=${endY.toInt()}, thresh=${bottomThreshold.toInt()}) — waiting")
                 } else {
                     DebugLog.i(TAG, "Circle detected (end at bottom) → TOGGLE")
                     resetCircleDetector()
