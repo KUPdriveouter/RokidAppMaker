@@ -830,7 +830,7 @@ class TouchMouseService : AccessibilityService(), HeadTracker.Listener {
     // ==============================
 
     override fun onHeadMove(deltaX: Float, deltaY: Float): HeadTracker.ClampResult {
-        if (!isActive) {
+        if (!isActive || screenOff) {
             return HeadTracker.ClampResult(false, false)
         }
 
